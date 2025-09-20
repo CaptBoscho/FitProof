@@ -17,7 +17,7 @@ export class HealthResolver {
       status: dbHealthy ? 'OK' : 'Unhealthy',
       timestamp: new Date(),
       service: 'FitProof Backend',
-      database: dbHealthy ? 'Connected' : 'Disconnected'
+      database: dbHealthy ? 'Connected' : 'Disconnected',
     };
   }
 }

@@ -6,7 +6,7 @@ describe('GraphQL Schema', () => {
   test('should build schema successfully', async () => {
     const schema = await buildSchema({
       resolvers: [HealthResolver, ExerciseResolver],
-      validate: false
+      validate: false,
     });
 
     expect(schema).toBeDefined();
@@ -17,7 +17,7 @@ describe('GraphQL Schema', () => {
   test('should include health queries', async () => {
     const schema = await buildSchema({
       resolvers: [HealthResolver, ExerciseResolver],
-      validate: false
+      validate: false,
     });
 
     const queryType = schema.getQueryType();
@@ -30,7 +30,7 @@ describe('GraphQL Schema', () => {
   test('should include exercise queries and mutations', async () => {
     const schema = await buildSchema({
       resolvers: [HealthResolver, ExerciseResolver],
-      validate: false
+      validate: false,
     });
 
     const queryType = schema.getQueryType();

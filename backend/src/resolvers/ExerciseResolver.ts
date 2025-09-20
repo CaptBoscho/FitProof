@@ -1,73 +1,109 @@
-import { Query, Mutation, Arg, Resolver } from 'type-graphql';
-import { Exercise, CreateExerciseInput, UpdateExerciseInput } from '../types/exercise';
+import { Query, Mutation, Arg, Resolver, InputType, Field } from 'type-graphql';
+import { Exercise } from '../entities/Exercise';
+import { ExerciseRepository } from '../repositories/ExerciseRepository';
+import { AppDataSource } from '../config/database';
+
+@InputType()
+class CreateExerciseInput {
+  @Field()
+  name: string;
+
+  @Field()
+  pointsPerRep: number;
+
+  @Field({ nullable: true })
+  description?: string;
+
+  @Field(() => [String], { nullable: true })
+  validationRules?: string[];
+
+  @Field({ nullable: true })
+  category?: string;
+
+  @Field({ nullable: true })
+  iconColor?: string;
+
+  @Field({ nullable: true })
+  instructionText?: string;
+}
+
+@InputType()
+class UpdateExerciseInput {
+  @Field()
+  id: string;
+
+  @Field({ nullable: true })
+  name?: string;
+
+  @Field({ nullable: true })
+  pointsPerRep?: number;
+
+  @Field({ nullable: true })
+  description?: string;
+
+  @Field(() => [String], { nullable: true })
+  validationRules?: string[];
+
+  @Field({ nullable: true })
+  category?: string;
+
+  @Field({ nullable: true })
+  iconColor?: string;
+
+  @Field({ nullable: true })
+  instructionText?: string;
+
+  @Field({ nullable: true })
+  isActive?: boolean;
+}
 
 @Resolver(() => Exercise)
 export class ExerciseResolver {
+  private exerciseRepository: ExerciseRepository;
+
+  constructor() {
+    this.exerciseRepository = new ExerciseRepository(AppDataSource);
+  }
+
   @Query(() => [Exercise])
   async exercises(): Promise<Exercise[]> {
-    // Mock data for now - will connect to database in future days
-    return [
-      {
-        id: '1',
-        name: 'Pushup',
-        pointsPerRep: 2,
-        description: 'Standard pushup exercise',
-        validationRules: ['proper_form', 'full_range_of_motion'],
-        createdAt: new Date(),
-        updatedAt: new Date()
-      },
-      {
-        id: '2',
-        name: 'Situp',
-        pointsPerRep: 2,
-        description: 'Standard situp exercise',
-        validationRules: ['proper_form', 'full_range_of_motion'],
-        createdAt: new Date(),
-        updatedAt: new Date()
-      },
-      {
-        id: '3',
-        name: 'Squat',
-        pointsPerRep: 1,
-        description: 'Bodyweight squat exercise',
-        validationRules: ['proper_depth', 'knee_tracking'],
-        createdAt: new Date(),
-        updatedAt: new Date()
-      }
-    ];
+    return await this.exerciseRepository.findAll({ activeOnly: true });
   }
 
   @Query(() => Exercise, { nullable: true })
   async exercise(@Arg('id') id: string): Promise<Exercise | null> {
-    // Mock implementation - will connect to database later
-    const exercises = await this.exercises();
-    return exercises.find(ex => ex.id === id) || null;
+    return await this.exerciseRepository.findById(id);
+  }
+
+  @Query(() => [String])
+  async exerciseCategories(): Promise<string[]> {
+    return await this.exerciseRepository.getCategories();
+  }
+
+  @Query(() => [Exercise])
+  async exercisesByCategory(@Arg('category') category: string): Promise<Exercise[]> {
+    return await this.exerciseRepository.findByCategory(category);
   }
 
   @Mutation(() => Exercise)
   async createExercise(@Arg('input') input: CreateExerciseInput): Promise<Exercise> {
-    // Mock implementation - will connect to database later
-    return {
-      id: Math.random().toString(36).substr(2, 9),
-      ...input,
-      validationRules: [],
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
+    return await this.exerciseRepository.create(input);
   }
 
   @Mutation(() => Exercise)
   async updateExercise(@Arg('input') input: UpdateExerciseInput): Promise<Exercise> {
-    // Mock implementation - will connect to database later
-    const exercise = await this.exercise(input.id);
+    const { id, ...updateData } = input;
+    const exercise = await this.exerciseRepository.update(id, updateData);
+
     if (!exercise) {
       throw new Error('Exercise not found');
     }
 
-    return {
-      ...exercise,
-      ...input,
-      updatedAt: new Date()
-    };
+    return exercise;
+  }
+
+  @Mutation(() => Boolean)
+  async deleteExercise(@Arg('id') id: string): Promise<boolean> {
+    return await this.exerciseRepository.softDelete(id);
   }
 }

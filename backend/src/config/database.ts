@@ -13,8 +13,8 @@ export const databaseConfig: DataSourceOptions = {
   port: parseInt(process.env.DB_PORT || '5432'),
   username: process.env.DB_USER || 'fitproof_user',
   password: process.env.DB_PASSWORD || 'fitproof_password',
-  database: isTest ? 'fitproof_test' : (process.env.DB_NAME || 'fitproof_dev'),
-  entities: ['src/models/**/*.ts'],
+  database: isTest ? 'fitproof_test' : process.env.DB_NAME || 'fitproof_dev',
+  entities: ['src/entities/**/*.ts'],
   migrations: ['src/migrations/**/*.ts'],
   synchronize: isDevelopment, // Auto-sync in development only
   logging: isDevelopment ? ['query', 'error'] : ['error'],

@@ -9,7 +9,7 @@ const createTestApp = () => {
     res.status(200).json({
       status: 'OK',
       timestamp: expect.any(String),
-      service: 'FitProof Backend'
+      service: 'FitProof Backend',
     });
   });
 
@@ -20,13 +20,11 @@ describe('Server Health Check', () => {
   test('should return 200 for health check endpoint', async () => {
     const app = createTestApp();
 
-    const response = await request(app)
-      .get('/health')
-      .expect(200);
+    const response = await request(app).get('/health').expect(200);
 
     expect(response.body).toMatchObject({
       status: 'OK',
-      service: 'FitProof Backend'
+      service: 'FitProof Backend',
     });
 
     expect(response.body.timestamp).toBeDefined();
