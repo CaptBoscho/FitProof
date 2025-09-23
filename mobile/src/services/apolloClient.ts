@@ -5,6 +5,7 @@ import { CONFIG } from '../constants/config';
 import { SecureStorageService } from './SecureStorageService';
 
 // HTTP Link to connect to GraphQL server
+console.log('🔗 [Apollo] GraphQL URL:', CONFIG.GRAPHQL_URL);
 const httpLink = createHttpLink({
   uri: CONFIG.GRAPHQL_URL,
 });

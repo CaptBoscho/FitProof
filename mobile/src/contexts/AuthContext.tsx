@@ -226,7 +226,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         }
       }, 15 * 60 * 1000); // Refresh every 15 minutes
     } else {
-      console.log('❌ [AuthContext] Not setting up interval - user not authenticated or no tokens');
+      console.log('ℹ️ [AuthContext] Skipping token refresh interval - user not authenticated or no tokens');
     }
 
     return () => {

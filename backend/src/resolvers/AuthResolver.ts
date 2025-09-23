@@ -33,10 +33,19 @@ export class AuthResolver {
   async register(
     @Arg('input') input: RegisterInput
   ): Promise<RegisterResponse> {
+    console.log('🚀 [AuthResolver] register mutation called');
+    console.log('📝 [AuthResolver] register input:', {
+      email: input.email,
+      username: input.username,
+      passwordLength: input.password?.length || 0
+    });
+
     try {
       // Validate password strength
+      console.log('🔒 [AuthResolver] Validating password strength...');
       const passwordValidation = PasswordService.validatePasswordStrength(input.password);
       if (!passwordValidation.isValid) {
+        console.log('❌ [AuthResolver] Password validation failed:', passwordValidation.errors);
         return {
           success: false,
           message: 'Password does not meet security requirements',
@@ -48,13 +57,16 @@ export class AuthResolver {
           })
         };
       }
+      console.log('✅ [AuthResolver] Password validation passed');
 
       // Check if user already exists
+      console.log('📧 [AuthResolver] Checking for existing user by email...');
       const existingUserByEmail = await this.userRepository.findOne({
         where: { email: input.email }
       });
 
       if (existingUserByEmail) {
+        console.log('❌ [AuthResolver] Email already exists:', input.email);
         return {
           success: false,
           message: 'Registration failed',
@@ -66,6 +78,7 @@ export class AuthResolver {
           })()
         };
       }
+      console.log('✅ [AuthResolver] Email is available');
 
       const existingUserByUsername = await this.userRepository.findOne({
         where: { username: input.username }

@@ -1,7 +1,7 @@
 // App configuration constants
 export const CONFIG = {
   // Backend API URLs - adjust based on your backend server
-  GRAPHQL_URL: process.env.NODE_ENV === 'development' ? 'http://localhost:4001/graphql' : 'https://your-production-api.com/graphql',
+  GRAPHQL_URL: process.env.NODE_ENV === 'development' ? 'http://localhost:4000/graphql' : 'https://your-production-api.com/graphql',
   API_URL: process.env.NODE_ENV === 'development' ? 'http://localhost:4001' : 'https://your-production-api.com',
 
   // App information
