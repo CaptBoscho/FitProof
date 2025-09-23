@@ -1,23 +1,23 @@
 import { ApolloClient, InMemoryCache, createHttpLink, from } from '@apollo/client';
 import { setContext } from '@apollo/client/link/context';
 import { onError } from '@apollo/client/link/error';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CONFIG } from '../constants/config';
+import { SecureStorageService } from './SecureStorageService';
 
 // HTTP Link to connect to GraphQL server
 const httpLink = createHttpLink({
-  uri: CONFIG.API_URL,
+  uri: CONFIG.GRAPHQL_URL,
 });
 
 // Auth link to add authentication token to requests
 const authLink = setContext(async (_, { headers }) => {
   try {
-    const token = await AsyncStorage.getItem(CONFIG.STORAGE_KEYS.AUTH_TOKEN);
+    const tokens = await SecureStorageService.getTokens();
 
     return {
       headers: {
         ...headers,
-        authorization: token ? `Bearer ${token}` : '',
+        authorization: tokens?.accessToken ? `Bearer ${tokens.accessToken}` : '',
       },
     };
   } catch (error) {
@@ -39,9 +39,9 @@ const errorLink = onError(({ graphQLErrors, networkError, operation, forward }) 
 
     // Handle specific network errors
     if (networkError.statusCode === 401) {
-      // Unauthorized - clear token and redirect to login
-      AsyncStorage.removeItem(CONFIG.STORAGE_KEYS.AUTH_TOKEN);
-      // TODO: Navigate to login screen
+      // Unauthorized - clear tokens and let auth context handle logout
+      SecureStorageService.clearTokens();
+      // The auth context will handle navigation to login screen
     }
   }
 });

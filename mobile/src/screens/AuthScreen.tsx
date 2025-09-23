@@ -1,35 +1,122 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  Alert,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from 'react-native';
 import { BaseScreenProps } from '../types';
 import { CONFIG } from '../constants/config';
+import { useAuth } from '../contexts/AuthContext';
 
 interface AuthScreenProps extends BaseScreenProps {}
 
-export const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
+interface ValidationErrors {
+  email?: string;
+  username?: string;
+  password?: string;
+}
+
+export const AuthScreen: React.FC<AuthScreenProps> = () => {
+  const { login, register, isLoading, error, clearError } = useAuth();
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
+
+  // Clear error when switching modes
+  useEffect(() => {
+    clearError();
+    setValidationErrors({});
+  }, [isLogin, clearError]);
+
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const validatePassword = (password: string): string[] => {
+    const errors: string[] = [];
+    if (password.length < 8) {
+      errors.push('Password must be at least 8 characters long');
+    }
+    if (!/[A-Z]/.test(password)) {
+      errors.push('Password must contain at least one uppercase letter');
+    }
+    if (!/[a-z]/.test(password)) {
+      errors.push('Password must contain at least one lowercase letter');
+    }
+    if (!/\d/.test(password)) {
+      errors.push('Password must contain at least one number');
+    }
+    if (!/[!@#$%^&*]/.test(password)) {
+      errors.push('Password must contain at least one special character (!@#$%^&*)');
+    }
+    return errors;
+  };
+
+  const validateForm = (): boolean => {
+    const errors: ValidationErrors = {};
+
+    // Email validation
+    if (!email.trim()) {
+      errors.email = 'Email is required';
+    } else if (!validateEmail(email)) {
+      errors.email = 'Please enter a valid email address';
+    }
+
+    // Username validation (registration only)
+    if (!isLogin) {
+      if (!username.trim()) {
+        errors.username = 'Username is required';
+      } else if (username.length < 3) {
+        errors.username = 'Username must be at least 3 characters long';
+      } else if (username.length > 30) {
+        errors.username = 'Username must be less than 30 characters';
+      }
+    }
+
+    // Password validation
+    if (!password) {
+      errors.password = 'Password is required';
+    } else if (!isLogin) {
+      const passwordErrors = validatePassword(password);
+      if (passwordErrors.length > 0) {
+        errors.password = passwordErrors[0]; // Show first error
+      }
+
+      // Confirm password validation
+      if (password !== confirmPassword) {
+        errors.password = 'Passwords do not match';
+      }
+    }
+
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const handleAuth = async () => {
-    if (!email || !password || (!isLogin && !username)) {
-      Alert.alert('Error', 'Please fill in all fields');
+    if (!validateForm()) {
       return;
     }
 
-    setLoading(true);
-
     try {
-      // TODO: Implement actual authentication with Apollo Client
-      // For now, simulate successful login
-      setTimeout(() => {
-        setLoading(false);
-        navigation.replace('Main');
-      }, 1000);
+      if (isLogin) {
+        await login(email.trim(), password);
+      } else {
+        await register(email.trim(), username.trim(), password);
+      }
     } catch (error) {
-      setLoading(false);
-      Alert.alert('Error', 'Authentication failed');
+      // Error handling is done in the auth context
+      console.error('Auth error:', error);
     }
   };
 
@@ -38,81 +125,181 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ navigation }) => {
     setEmail('');
     setUsername('');
     setPassword('');
+    setConfirmPassword('');
+    setValidationErrors({});
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.logo}>💪 FitProof</Text>
-        <Text style={styles.tagline}>Prove your fitness journey</Text>
-      </View>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.header}>
+          <Text style={styles.logo}>💪 FitProof</Text>
+          <Text style={styles.tagline}>Prove your fitness journey</Text>
+        </View>
 
-      <View style={styles.formContainer}>
-        <Text style={styles.formTitle}>{isLogin ? 'Welcome Back!' : 'Join FitProof'}</Text>
+        <View style={styles.formContainer}>
+          <Text style={styles.formTitle}>{isLogin ? 'Welcome Back!' : 'Join FitProof'}</Text>
 
-        <TextInput
-          style={styles.input}
-          placeholder="Email"
-          value={email}
-          onChangeText={setEmail}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+          {/* Global Error Message */}
+          {error && (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          )}
 
-        {!isLogin && (
-          <TextInput
-            style={styles.input}
-            placeholder="Username"
-            value={username}
-            onChangeText={setUsername}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-        )}
+          {/* Email Input */}
+          <View style={styles.inputContainer}>
+            <TextInput
+              style={[styles.input, validationErrors.email && styles.inputError]}
+              placeholder="Email"
+              value={email}
+              onChangeText={(text) => {
+                setEmail(text);
+                if (validationErrors.email) {
+                  setValidationErrors(prev => ({ ...prev, email: undefined }));
+                }
+              }}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!isLoading}
+            />
+            {validationErrors.email && (
+              <Text style={styles.validationError}>{validationErrors.email}</Text>
+            )}
+          </View>
 
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+          {/* Username Input (Registration only) */}
+          {!isLogin && (
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={[styles.input, validationErrors.username && styles.inputError]}
+                placeholder="Username"
+                value={username}
+                onChangeText={(text) => {
+                  setUsername(text);
+                  if (validationErrors.username) {
+                    setValidationErrors(prev => ({ ...prev, username: undefined }));
+                  }
+                }}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!isLoading}
+              />
+              {validationErrors.username && (
+                <Text style={styles.validationError}>{validationErrors.username}</Text>
+              )}
+            </View>
+          )}
 
-        <TouchableOpacity
-          style={[styles.authButton, loading && styles.authButtonDisabled]}
-          onPress={handleAuth}
-          disabled={loading}
-        >
-          <Text style={styles.authButtonText}>
-            {loading ? 'Loading...' : isLogin ? 'Login' : 'Sign Up'}
-          </Text>
-        </TouchableOpacity>
+          {/* Password Input */}
+          <View style={styles.inputContainer}>
+            <TextInput
+              style={[styles.input, validationErrors.password && styles.inputError]}
+              placeholder="Password"
+              value={password}
+              onChangeText={(text) => {
+                setPassword(text);
+                if (validationErrors.password) {
+                  setValidationErrors(prev => ({ ...prev, password: undefined }));
+                }
+              }}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!isLoading}
+            />
+            {validationErrors.password && (
+              <Text style={styles.validationError}>{validationErrors.password}</Text>
+            )}
+          </View>
 
-        <View style={styles.switchContainer}>
-          <Text style={styles.switchText}>
-            {isLogin ? "Don't have an account? " : 'Already have an account? '}
-          </Text>
-          <TouchableOpacity onPress={toggleAuthMode}>
-            <Text style={styles.switchLink}>{isLogin ? 'Sign Up' : 'Login'}</Text>
+          {/* Confirm Password Input (Registration only) */}
+          {!isLogin && (
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={[styles.input, validationErrors.password && styles.inputError]}
+                placeholder="Confirm Password"
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!isLoading}
+              />
+            </View>
+          )}
+
+          {/* Auth Button */}
+          <TouchableOpacity
+            style={[styles.authButton, isLoading && styles.authButtonDisabled]}
+            onPress={handleAuth}
+            disabled={isLoading}
+          >
+            {isLoading ? (
+              <ActivityIndicator color={CONFIG.COLORS.WHITE} />
+            ) : (
+              <Text style={styles.authButtonText}>
+                {isLogin ? 'Login' : 'Sign Up'}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          {/* Switch Auth Mode */}
+          <View style={styles.switchContainer}>
+            <Text style={styles.switchText}>
+              {isLogin ? "Don't have an account? " : 'Already have an account? '}
+            </Text>
+            <TouchableOpacity onPress={toggleAuthMode} disabled={isLoading}>
+              <Text style={[styles.switchLink, isLoading && styles.switchLinkDisabled]}>
+                {isLogin ? 'Sign Up' : 'Login'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Password Reset Link (Login only) */}
+          {isLogin && (
+            <TouchableOpacity
+              style={styles.forgotPasswordContainer}
+              onPress={() => Alert.alert('Password Reset', 'Password reset functionality coming soon!')}
+              disabled={isLoading}
+            >
+              <Text style={[styles.forgotPasswordText, isLoading && styles.switchLinkDisabled]}>
+                Forgot Password?
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Social Login Placeholder */}
+        <View style={styles.socialContainer}>
+          <Text style={styles.socialTitle}>Or continue with</Text>
+
+          <TouchableOpacity
+            style={[styles.socialButton, isLoading && styles.socialButtonDisabled]}
+            disabled={isLoading}
+            onPress={() => Alert.alert('Social Login', 'Social login coming soon!')}
+          >
+            <Text style={styles.socialButtonText}>🔍 Google</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.socialButton, isLoading && styles.socialButtonDisabled]}
+            disabled={isLoading}
+            onPress={() => Alert.alert('Social Login', 'Social login coming soon!')}
+          >
+            <Text style={styles.socialButtonText}>🍎 Apple</Text>
           </TouchableOpacity>
         </View>
-      </View>
-
-      <View style={styles.socialContainer}>
-        <Text style={styles.socialTitle}>Or continue with</Text>
-
-        <TouchableOpacity style={styles.socialButton}>
-          <Text style={styles.socialButtonText}>🔍 Google</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.socialButton}>
-          <Text style={styles.socialButtonText}>🍎 Apple</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -120,6 +307,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: CONFIG.COLORS.BACKGROUND,
+  },
+  scrollContainer: {
+    flexGrow: 1,
     padding: 20,
   },
   header: {
@@ -147,6 +337,22 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 30,
   },
+  errorContainer: {
+    backgroundColor: `${CONFIG.COLORS.ERROR}15`,
+    borderColor: CONFIG.COLORS.ERROR,
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  errorText: {
+    color: CONFIG.COLORS.ERROR,
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  inputContainer: {
+    marginBottom: 16,
+  },
   input: {
     backgroundColor: CONFIG.COLORS.WHITE,
     borderWidth: 1,
@@ -154,7 +360,15 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     fontSize: 16,
-    marginBottom: 16,
+  },
+  inputError: {
+    borderColor: CONFIG.COLORS.ERROR,
+  },
+  validationError: {
+    color: CONFIG.COLORS.ERROR,
+    fontSize: 12,
+    marginTop: 4,
+    marginLeft: 4,
   },
   authButton: {
     backgroundColor: CONFIG.COLORS.PRIMARY,
@@ -162,6 +376,8 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
     marginTop: 8,
+    minHeight: 56,
+    justifyContent: 'center',
   },
   authButtonDisabled: {
     opacity: 0.6,
@@ -185,6 +401,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  switchLinkDisabled: {
+    opacity: 0.5,
+  },
+  forgotPasswordContainer: {
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  forgotPasswordText: {
+    color: CONFIG.COLORS.PRIMARY,
+    fontSize: 14,
+    fontWeight: '500',
+  },
   socialContainer: {
     alignItems: 'center',
   },
@@ -202,6 +430,9 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     marginBottom: 12,
+  },
+  socialButtonDisabled: {
+    opacity: 0.5,
   },
   socialButtonText: {
     fontSize: 16,

@@ -6,6 +6,8 @@ export interface User {
   username: string;
   totalPoints: number;
   currentStreak: number;
+  lastWorkoutDate?: string;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -62,6 +64,7 @@ export type RootStackParamList = {
     exerciseId: string;
   };
   Profile: undefined;
+  EditProfile: undefined;
   Settings: undefined;
 };
 

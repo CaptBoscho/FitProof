@@ -2,10 +2,13 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { BaseScreenProps } from '../types';
 import { CONFIG } from '../constants/config';
+import { useAuth } from '../contexts/AuthContext';
 
 interface HomeScreenProps extends BaseScreenProps {}
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
+  const { user, logout } = useAuth();
+
   const handleStartWorkout = () => {
     // Navigate to exercise selection
     navigation.navigate('Exercises');
@@ -19,17 +22,25 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Welcome to FitProof!</Text>
-        <Text style={styles.subtitle}>Track your fitness journey</Text>
+        <Text style={styles.title}>Welcome back, {user?.username || 'User'}!</Text>
+        <Text style={styles.subtitle}>Ready to crush your fitness goals?</Text>
+        <TouchableOpacity style={styles.logoutButton} onPress={logout}>
+          <Text style={styles.logoutButtonText}>Logout</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.userInfo}>
+        <Text style={styles.userInfoText}>Logged in as: {user?.email}</Text>
+        <Text style={styles.userInfoText}>Username: {user?.username}</Text>
       </View>
 
       <View style={styles.statsContainer}>
         <View style={styles.statCard}>
-          <Text style={styles.statNumber}>0</Text>
+          <Text style={styles.statNumber}>{user?.totalPoints || 0}</Text>
           <Text style={styles.statLabel}>Total Points</Text>
         </View>
         <View style={styles.statCard}>
-          <Text style={styles.statNumber}>0</Text>
+          <Text style={styles.statNumber}>{user?.currentStreak || 0}</Text>
           <Text style={styles.statLabel}>Current Streak</Text>
         </View>
       </View>
@@ -64,7 +75,35 @@ const styles = StyleSheet.create({
   header: {
     alignItems: 'center',
     marginTop: 40,
-    marginBottom: 30,
+    marginBottom: 20,
+  },
+  logoutButton: {
+    marginTop: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: CONFIG.COLORS.ERROR,
+    borderRadius: 8,
+  },
+  logoutButtonText: {
+    color: CONFIG.COLORS.WHITE,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  userInfo: {
+    backgroundColor: CONFIG.COLORS.WHITE,
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 20,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  userInfoText: {
+    fontSize: 14,
+    color: CONFIG.COLORS.TEXT_SECONDARY,
+    marginBottom: 4,
   },
   title: {
     fontSize: 28,

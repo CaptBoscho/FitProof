@@ -21,6 +21,6 @@ module.exports = {
     '<rootDir>/.expo/',
   ],
   transformIgnorePatterns: [
-    'node_modules/(?!(jest-)?react-native|@react-native|expo-modules-core|expo-status-bar|@expo/vector-icons)',
+    'node_modules/(?!(jest-)?react-native|@react-native|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg)',
   ],
 };

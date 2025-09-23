@@ -1,61 +1,9 @@
-import { Query, Mutation, Arg, Resolver, InputType, Field } from 'type-graphql';
+import { Query, Mutation, Arg, Resolver, ID, Int } from 'type-graphql';
 import { Exercise } from '../entities/Exercise';
 import { ExerciseRepository } from '../repositories/ExerciseRepository';
 import { AppDataSource } from '../config/database';
-
-@InputType()
-class CreateExerciseInput {
-  @Field()
-  name: string;
-
-  @Field()
-  pointsPerRep: number;
-
-  @Field({ nullable: true })
-  description?: string;
-
-  @Field(() => [String], { nullable: true })
-  validationRules?: string[];
-
-  @Field({ nullable: true })
-  category?: string;
-
-  @Field({ nullable: true })
-  iconColor?: string;
-
-  @Field({ nullable: true })
-  instructionText?: string;
-}
-
-@InputType()
-class UpdateExerciseInput {
-  @Field()
-  id: string;
-
-  @Field({ nullable: true })
-  name?: string;
-
-  @Field({ nullable: true })
-  pointsPerRep?: number;
-
-  @Field({ nullable: true })
-  description?: string;
-
-  @Field(() => [String], { nullable: true })
-  validationRules?: string[];
-
-  @Field({ nullable: true })
-  category?: string;
-
-  @Field({ nullable: true })
-  iconColor?: string;
-
-  @Field({ nullable: true })
-  instructionText?: string;
-
-  @Field({ nullable: true })
-  isActive?: boolean;
-}
+import { CreateExerciseInput, UpdateExerciseInput, ExerciseFiltersInput, ExerciseSearchInput } from '../types/ExerciseTypes';
+import { GenericResponse } from '../types/ResponseTypes';
 
 @Resolver(() => Exercise)
 export class ExerciseResolver {
@@ -66,12 +14,14 @@ export class ExerciseResolver {
   }
 
   @Query(() => [Exercise])
-  async exercises(): Promise<Exercise[]> {
-    return await this.exerciseRepository.findAll({ activeOnly: true });
+  async exercises(
+    @Arg('filters', { nullable: true }) filters?: ExerciseFiltersInput
+  ): Promise<Exercise[]> {
+    return await this.exerciseRepository.findAll(filters || { activeOnly: true });
   }
 
   @Query(() => Exercise, { nullable: true })
-  async exercise(@Arg('id') id: string): Promise<Exercise | null> {
+  async exercise(@Arg('id', () => ID) id: string): Promise<Exercise | null> {
     return await this.exerciseRepository.findById(id);
   }
 
@@ -85,25 +35,56 @@ export class ExerciseResolver {
     return await this.exerciseRepository.findByCategory(category);
   }
 
+  @Query(() => [Exercise])
+  async searchExercises(@Arg('input') input: ExerciseSearchInput): Promise<Exercise[]> {
+    return await this.exerciseRepository.searchByName(input.searchTerm, input.activeOnly);
+  }
+
+  @Query(() => Int)
+  async exerciseCount(
+    @Arg('filters', { nullable: true }) filters?: ExerciseFiltersInput
+  ): Promise<number> {
+    return await this.exerciseRepository.count(filters);
+  }
+
   @Mutation(() => Exercise)
   async createExercise(@Arg('input') input: CreateExerciseInput): Promise<Exercise> {
-    return await this.exerciseRepository.create(input);
+    try {
+      return await this.exerciseRepository.create(input);
+    } catch (error) {
+      throw new Error(`Failed to create exercise: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   @Mutation(() => Exercise)
-  async updateExercise(@Arg('input') input: UpdateExerciseInput): Promise<Exercise> {
-    const { id, ...updateData } = input;
-    const exercise = await this.exerciseRepository.update(id, updateData);
-
-    if (!exercise) {
-      throw new Error('Exercise not found');
+  async updateExercise(
+    @Arg('id', () => ID) id: string,
+    @Arg('input') input: UpdateExerciseInput
+  ): Promise<Exercise> {
+    try {
+      const exercise = await this.exerciseRepository.update(id, input);
+      if (!exercise) {
+        throw new Error('Exercise not found');
+      }
+      return exercise;
+    } catch (error) {
+      throw new Error(`Failed to update exercise: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-
-    return exercise;
   }
 
-  @Mutation(() => Boolean)
-  async deleteExercise(@Arg('id') id: string): Promise<boolean> {
-    return await this.exerciseRepository.softDelete(id);
+  @Mutation(() => GenericResponse)
+  async deleteExercise(@Arg('id', () => ID) id: string): Promise<GenericResponse> {
+    try {
+      const deleted = await this.exerciseRepository.softDelete(id);
+      return {
+        success: deleted,
+        message: deleted ? 'Exercise deleted successfully' : 'Exercise not found'
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Failed to delete exercise: ${error instanceof Error ? error.message : 'Unknown error'}`
+      };
+    }
   }
 }
