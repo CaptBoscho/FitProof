@@ -424,64 +424,104 @@ User profile should be viewable and editable. Profile updates should sync with b
 
 ## Chunk 4: MediaPipe Integration
 
-### Prompt 4.1: MediaPipe Setup
+### Prompt 4.1: Native MediaPipe Setup (Full Native Component Architecture)
 
 ```
-Set up MediaPipe pose detection for React Native with proper error handling and device compatibility.
+Set up native MediaPipe integration with custom pose detection model using full native camera components for maximum performance.
+
+**Architecture Reference**: `/Users/corbin/Repos2/FitProof/MEDIAPIPE_RESEARCH_DECISIONS.md`
+**Model File**: Use `/Users/corbin/Repos2/FitProof/pose_landmarker_lite.task` (5.5MB MediaPipe model)
 
 Requirements:
-1. Install @mediapipe/pose and react-native-mediapipe packages
-2. Configure platform-specific dependencies for iOS and Android
-3. Create basic CameraComponent with MediaPipe initialization
-4. Implement pose detection initialization with error handling
-5. Add device capability checking and fallback options
-6. Configure proper camera permissions handling
+1. Create native module structure for iOS (Swift) and Android (Kotlin)
+2. Integrate MediaPipe SDKs on both platforms (iOS: CocoaPods, Android: Gradle)
+3. Implement native camera capture with AVCaptureSession (iOS) and CameraX (Android)
+4. Load custom pose_landmarker_lite.task model in native code
+5. Create React Native bridge interface for commands and landmark data
+6. Move pose model file to mobile app assets folder
 
 Write tests first:
-- MediaPipe initialization tests
-- Camera permission tests
-- Device compatibility tests
-- Error handling tests
-- Component mounting tests
+- Native module initialization tests
+- MediaPipe SDK integration tests
+- Custom model loading tests
+- Camera permissions and capture tests
+- Bridge communication tests
 
 Implementation should include:
-- MediaPipe configuration and setup
-- CameraComponent with pose detection initialization
-- Permission handling for camera access
-- Device capability detection
-- Error boundaries for MediaPipe failures
+- iOS: Swift native module with MediaPipe iOS SDK + AVCaptureSession
+- Android: Kotlin native module with MediaPipe Android SDK + CameraX
+- Bridge interface: Commands (start/stop camera, load model) and events (landmarks, poses, errors)
+- Asset management: pose_landmarker_lite.task in platform-specific assets
+- Error handling: Native error boundaries with bridge error reporting
 
-MediaPipe should initialize successfully on device. Camera should be accessible with pose detection ready. All tests must pass.
+**Bridge Interface**:
+```typescript
+interface MediaPipeBridge {
+  startCamera(): Promise<void>
+  stopCamera(): Promise<void>
+  loadModel(modelPath: string): Promise<void>
+  setExerciseMode(exercise: 'pushup' | 'situp' | 'squat'): void
+
+  // Event listeners
+  onLandmarksDetected: (landmarks: PoseLandmarks) => void
+  onPoseClassified: (pose: PoseType, confidence: number) => void
+  onError: (error: string) => void
+}
 ```
 
-### Prompt 4.2: Pose Detection Foundation
+Success criteria: Native camera displays in RN app, custom model loads successfully, 33 pose landmarks stream to React Native at 30+ fps. All tests must pass.
+```
+
+### Prompt 4.2: Native Pose Detection Foundation
 
 ```
-Building on MediaPipe setup, implement real-time pose landmark extraction with confidence scoring and performance optimization.
+Building on native MediaPipe setup, implement real-time pose landmark extraction in native code with optimized performance for 60fps target.
+
+**Architecture**: Native camera processing with React Native bridge for landmark data
+**Model**: Custom pose_landmarker_lite.task with 33 pose landmarks
 
 Requirements:
-1. Implement real-time pose landmark extraction from camera frames
-2. Create TypeScript types for landmark data structures
-3. Add pose detection confidence scoring and filtering
-4. Implement frame rate optimization (target 30-60fps)
-5. Create landmark data validation and error handling
-6. Add performance monitoring for pose detection
+1. Implement native real-time pose landmark extraction (30-60fps)
+2. Create TypeScript types for 33-point landmark data structures
+3. Add native confidence scoring and filtering (minimum thresholds)
+4. Implement native frame rate optimization with GPU acceleration
+5. Create landmark data validation and smoothing algorithms
+6. Add performance monitoring (fps, processing time, memory usage)
 
 Write tests first:
-- Landmark extraction tests with mock data
-- Confidence scoring tests
-- Performance benchmarking tests
-- Data validation tests
-- Error handling tests
+- Native landmark extraction tests with mock camera frames
+- 33-point landmark data structure validation tests
+- Confidence scoring and filtering tests
+- Performance benchmarking tests (target: <17ms per frame)
+- Memory management tests
+- Bridge communication latency tests
 
 Implementation should include:
-- Real-time pose detection processing
-- Landmark data types and interfaces
-- Confidence scoring and filtering logic
-- Frame rate optimization strategies
-- Performance monitoring utilities
+- Native pose detection processing in Swift/Kotlin
+- MediaPipe PoseLandmarker integration with custom model
+- Landmark data types: PoseLandmarks interface with 33 points (x, y, z, visibility)
+- Native confidence scoring with configurable thresholds
+- Frame rate optimization: GPU processing, memory pooling, efficient threading
+- Performance monitoring: FPS counter, processing time metrics
 
-Pose detection should run smoothly at 30+ fps on device. Landmark data should be extracted reliably. All tests must pass.
+**Data Structures**:
+```typescript
+interface PoseLandmark {
+  x: number        // Normalized 0-1
+  y: number        // Normalized 0-1
+  z: number        // Depth (relative to hips)
+  visibility: number // 0-1 confidence
+}
+
+interface PoseLandmarks {
+  landmarks: PoseLandmark[33]  // 33 pose points
+  timestamp: number
+  processingTime: number
+  confidence: number
+}
+```
+
+Success criteria: Native processing achieves 30+ fps on mid-range devices, 33 landmarks stream reliably to React Native, confidence filtering works, performance metrics show <17ms processing time. All tests must pass.
 ```
 
 ### Prompt 4.3: Landmark Processing
