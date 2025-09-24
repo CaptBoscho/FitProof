@@ -27,13 +27,17 @@ npm run dev                  # Start GraphQL server
 cd mobile
 npm install
 
-# Run on specific platforms:
-npm run ios                  # Run on iOS simulator (requires Xcode)
-npm run android              # Run on Android emulator (requires Android Studio)
-npm run web                  # Run in web browser
+# iOS setup (required for MediaPipe)
+cd ios
+pod install
+cd ..
+
+# Run development builds (required - won't work in Expo Go)
+npx expo run:ios             # Build & run on iOS simulator/device
+npx expo run:android         # Build & run on Android emulator/device
 ```
 
-**Important**: After running `npm install`, if you encounter React version conflicts, the dependencies should resolve automatically. The project uses React 19.1.0 to match Expo 54 requirements.
+**⚠️ Development Build Required**: This app uses native MediaPipe modules and requires development builds. Cannot run in Expo Go.
 
 ### Web Build
 ```bash
@@ -151,44 +155,50 @@ npm install --legacy-peer-deps
 
 The project uses React 19.1.0 to match Expo 54 requirements.
 
+**iOS Build Issues**:
+```bash
+# Clean build environment
+cd ios
+rm -rf Pods Podfile.lock
+pod install
+cd ..
+npx expo run:ios
+```
+
+**Android Build Issues**:
+```bash
+# Clean build environment
+cd android
+./gradlew clean
+cd ..
+npx expo run:android
+```
+
 **Metro bundler issues**:
 ```bash
-npx expo start -c
-# or if that doesn't work:
-watchman watch-del '/Users/corbin/Repos2/FitProof' ; watchman watch-project '/Users/corbin/Repos2/FitProof'
-npx expo start -c
+# Clear Metro cache
+npx expo start --clear
+
+# Reset npm cache if needed
+npm start -- --reset-cache
 ```
 
-**"App entry not found" error**:
-This usually indicates an uncaught error in module loading:
-```bash
-# Clear all caches and restart
-rm -rf node_modules/.cache
-npx expo start -c
-# Check iOS Simulator console for specific error details
-```
+**Development build timeout**:
+- App may have built but crashed on startup
+- Check simulator/device logs in Console.app (iOS) or `adb logcat` (Android)
+- Try launching app manually from home screen
 
-**iOS Simulator Not Opening**:
-- Ensure Xcode is installed and updated
-- Open Xcode → Preferences → Locations → Command Line Tools is set
-- Run `npx expo run:ios` instead of `npm run ios`
-
-**Android Emulator Issues**:
-- Ensure Android Studio is installed with SDK
-- Create an AVD (Android Virtual Device) in Android Studio
-- Start emulator manually, then run `npm run android`
-
-**Physical Device Testing**:
-1. Install Expo Go app from App/Play Store
-2. Scan QR code displayed in terminal after `npm start`
-3. Ensure phone and computer are on same WiFi network
+**Native module linking issues**:
+- Clean and rebuild after any native changes
+- Ensure all dependencies are installed
 
 ## Project Status
 
-**Current Progress**: 23% Complete (14/60 days)
+**Current Progress**: 25% Complete (15/60 days)
 - ✅ Chunk 1: Project Foundation (5/5 days)
 - ✅ Chunk 2: Database Schema & Basic API (4/4 days)
-- ✅ Chunk 3: Authentication System (4/5 days - Complete)
-- 🔄 **Next**: Day 14: User Profile Management or Chunk 4: MediaPipe Integration
+- ✅ Chunk 3: Authentication System (5/5 days - Complete)
+- ✅ **Day 15: MediaPipe Setup** - Native module integration complete
+- 🔄 **Next**: Day 16: Pose Detection Foundation
 
 See [TODO.md](./TODO.md) for detailed progress tracking and roadmap.

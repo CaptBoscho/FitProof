@@ -1,0 +1,21 @@
+{
+  "name": "mediapipe-pose",
+  "version": "1.0.0",
+  "description": "Native MediaPipe pose detection for FitProof",
+  "main": "index.ts",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest"
+  },
+  "dependencies": {
+    "react-native": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "@types/react-native": "^0.73.0"
+  },
+  "peerDependencies": {
+    "react-native": "*"
+  }
+}

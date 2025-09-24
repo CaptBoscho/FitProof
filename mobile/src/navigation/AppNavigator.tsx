@@ -8,6 +8,7 @@ import { ExercisesScreen } from '../screens/ExercisesScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { EditProfileScreen } from '../screens/EditProfileScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
+import { MediaPipeDemoScreen } from '../screens/MediaPipeDemoScreen';
 import { RootStackParamList } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { ProtectedRoute } from '../components/ProtectedRoute';
@@ -65,9 +66,9 @@ export const AppNavigator: React.FC = () => {
           // Main App Stack - for authenticated users
           <>
             <Stack.Screen name="Main">
-              {() => (
+              {({ navigation, route }) => (
                 <ProtectedRoute requireAuth={true}>
-                  <HomeScreen />
+                  <HomeScreen navigation={navigation} route={route} />
                 </ProtectedRoute>
               )}
             </Stack.Screen>
@@ -80,24 +81,21 @@ export const AppNavigator: React.FC = () => {
                 headerRight: LogoutButton,
               }}
             >
-              {() => (
+              {({ navigation, route }) => (
                 <ProtectedRoute requireAuth={true}>
-                  <ExercisesScreen />
+                  <ExercisesScreen navigation={navigation} route={route} />
                 </ProtectedRoute>
               )}
             </Stack.Screen>
             <Stack.Screen
               name="Workout"
               options={{
-                headerShown: true,
-                title: 'Workout',
-                headerBackTitleVisible: false,
-                headerRight: LogoutButton,
+                headerShown: false,
               }}
             >
-              {() => (
+              {({ navigation, route }) => (
                 <ProtectedRoute requireAuth={true}>
-                  <WorkoutScreen />
+                  <MediaPipeDemoScreen navigation={navigation} route={route} />
                 </ProtectedRoute>
               )}
             </Stack.Screen>
@@ -110,9 +108,9 @@ export const AppNavigator: React.FC = () => {
                 headerRight: LogoutButton,
               }}
             >
-              {() => (
+              {({ navigation, route }) => (
                 <ProtectedRoute requireAuth={true}>
-                  <ProfileScreen />
+                  <ProfileScreen navigation={navigation} route={route} />
                 </ProtectedRoute>
               )}
             </Stack.Screen>
@@ -124,9 +122,9 @@ export const AppNavigator: React.FC = () => {
                 headerBackTitleVisible: false,
               }}
             >
-              {() => (
+              {({ navigation, route }) => (
                 <ProtectedRoute requireAuth={true}>
-                  <EditProfileScreen />
+                  <EditProfileScreen navigation={navigation} route={route} />
                 </ProtectedRoute>
               )}
             </Stack.Screen>
@@ -138,9 +136,9 @@ export const AppNavigator: React.FC = () => {
                 headerBackTitleVisible: false,
               }}
             >
-              {() => (
+              {({ navigation, route }) => (
                 <ProtectedRoute requireAuth={true}>
-                  <SettingsScreen />
+                  <SettingsScreen navigation={navigation} route={route} />
                 </ProtectedRoute>
               )}
             </Stack.Screen>
