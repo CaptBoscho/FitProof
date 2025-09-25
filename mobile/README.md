@@ -102,6 +102,20 @@ cd ..
 npx expo run:android
 ```
 
+**Backend connection issues (physical device):**
+When running on a physical Android device, the app can't reach `localhost` on your development machine. Set up port forwarding:
+
+```bash
+# Forward backend ports to device
+/Users/corbin/Library/Android/sdk/platform-tools/adb reverse tcp:4000 tcp:4000
+/Users/corbin/Library/Android/sdk/platform-tools/adb reverse tcp:4001 tcp:4001
+
+# Verify device connection
+/Users/corbin/Library/Android/sdk/platform-tools/adb devices
+```
+
+This allows your device to access `localhost:4000` and `localhost:4001` as if they were running on the device itself.
+
 **Metro bundler issues:**
 ```bash
 # Reset Metro cache

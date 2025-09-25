@@ -1,5 +1,6 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Platform } from 'react-native';
+import { PermissionsAndroid } from 'react-native';
 import { BaseScreenProps } from '../types';
 import { CONFIG } from '../constants/config';
 import { useAuth } from '../contexts/AuthContext';
@@ -8,8 +9,62 @@ interface HomeScreenProps extends BaseScreenProps {}
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   const { user, logout } = useAuth();
+  const [cameraPermissionGranted, setCameraPermissionGranted] = useState(false);
+
+  useEffect(() => {
+    requestCameraPermission();
+  }, []);
+
+  const requestCameraPermission = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+          {
+            title: 'FitProof Camera Permission',
+            message: 'FitProof needs access to your camera to detect your exercises and count reps.',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          }
+        );
+
+        if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+          setCameraPermissionGranted(true);
+        } else {
+          setCameraPermissionGranted(false);
+          Alert.alert(
+            'Camera Permission Required',
+            'Camera access is required to use FitProof for exercise detection. Please grant permission in Settings.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Retry', onPress: requestCameraPermission }
+            ]
+          );
+        }
+      } catch (err) {
+        console.warn('Camera permission error:', err);
+        setCameraPermissionGranted(false);
+      }
+    } else {
+      // iOS permissions are handled in Info.plist and at runtime by the camera module
+      setCameraPermissionGranted(true);
+    }
+  };
 
   const handleStartWorkout = () => {
+    if (!cameraPermissionGranted) {
+      Alert.alert(
+        'Camera Permission Required',
+        'Camera access is required to detect exercises. Please grant permission first.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Grant Permission', onPress: requestCameraPermission }
+        ]
+      );
+      return;
+    }
+
     // Navigate to exercise selection
     navigation.navigate('Exercises');
   };
