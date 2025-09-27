@@ -1,15 +1,18 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   StyleSheet,
   Text,
   TouchableOpacity,
-  ScrollView,
-  SafeAreaView,
+  StatusBar,
+  Dimensions,
 } from 'react-native';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { MediaPipePoseCamera } from '../components/MediaPipePoseCamera';
 import { PoseLandmarks, PoseType, ExerciseType } from 'mediapipe-pose';
 import { BaseScreenProps } from '../types';
+
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 interface MediaPipeDemoScreenProps extends BaseScreenProps {}
 
@@ -25,6 +28,15 @@ export const MediaPipeDemoScreen: React.FC<MediaPipeDemoScreenProps> = ({ naviga
     }
   };
 
+  const getExerciseDisplayName = (id: string): string => {
+    switch (id) {
+      case '1': return 'Push-ups';
+      case '2': return 'Sit-ups';
+      case '3': return 'Squats';
+      default: return 'Exercise';
+    }
+  };
+
   const [exerciseType, setExerciseType] = useState<ExerciseType>(getExerciseTypeFromId(exerciseId));
   const [currentPose, setCurrentPose] = useState<PoseType>('Unknown');
   const [confidence, setConfidence] = useState(0);
@@ -32,6 +44,9 @@ export const MediaPipeDemoScreen: React.FC<MediaPipeDemoScreenProps> = ({ naviga
   const [repCount, setRepCount] = useState(0);
   const [isInRepState, setIsInRepState] = useState(false);
   const [lastPoseChange, setLastPoseChange] = useState(Date.now());
+  const [dimensions, setDimensions] = useState(Dimensions.get('window'));
+
+  const exerciseName = getExerciseDisplayName(exerciseId);
 
   // Simple rep counting logic
   const handlePoseDetected = useCallback((pose: PoseType, poseConfidence: number) => {
@@ -78,78 +93,58 @@ export const MediaPipeDemoScreen: React.FC<MediaPipeDemoScreenProps> = ({ naviga
     setIsInRepState(false);
   }, []);
 
-  const exerciseOptions: { type: ExerciseType; label: string }[] = [
-    { type: 'pushup', label: 'Push-ups' },
-    { type: 'squat', label: 'Squats' },
-    { type: 'situp', label: 'Sit-ups' },
-  ];
+  // Handle orientation changes based on exercise type
+  const setOrientation = useCallback(async (exerciseType: ExerciseType) => {
+    try {
+      console.log('Setting orientation for exercise:', exerciseType);
+      if (exerciseType === 'pushup' || exerciseType === 'situp') {
+        console.log('Locking to landscape for', exerciseType);
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE_LEFT);
+      } else {
+        console.log('Locking to portrait for', exerciseType);
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+      }
+      console.log('Orientation set successfully');
+    } catch (error) {
+      console.warn('Failed to set orientation:', error);
+    }
+  }, []);
 
-  const currentExerciseLabel = exerciseOptions.find(ex => ex.type === exerciseType)?.label || 'Exercise';
+  // Handle back navigation and restore orientation
+  const handleGoBack = useCallback(async () => {
+    try {
+      await ScreenOrientation.unlockAsync();
+      navigation.goBack();
+    } catch (error) {
+      console.warn('Failed to unlock orientation:', error);
+      navigation.goBack();
+    }
+  }, [navigation]);
+
+  // Set orientation on mount and when exercise type changes
+  useEffect(() => {
+    setOrientation(exerciseType);
+
+    // Track dimension changes
+    const subscription = Dimensions.addEventListener('change', ({ window }) => {
+      setDimensions(window);
+    });
+
+    return () => {
+      subscription?.remove();
+      // Restore orientation on unmount
+      ScreenOrientation.unlockAsync().catch(console.warn);
+    };
+  }, [exerciseType, setOrientation]);
+
+  const isLandscape = dimensions.width > dimensions.height;
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={styles.backButtonText}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>{currentExerciseLabel} Workout</Text>
-        <Text style={styles.subtitle}>AI-powered form detection</Text>
-      </View>
+    <View style={styles.fullscreenContainer}>
+      <StatusBar hidden={true} />
 
-      {/* Exercise Selection */}
-      <View style={styles.exerciseSelection}>
-        {exerciseOptions.map((option) => (
-          <TouchableOpacity
-            key={option.type}
-            style={[
-              styles.exerciseButton,
-              exerciseType === option.type && styles.exerciseButtonActive,
-            ]}
-            onPress={() => {
-              setExerciseType(option.type);
-              resetRepCount();
-            }}
-          >
-            <Text
-              style={[
-                styles.exerciseButtonText,
-                exerciseType === option.type && styles.exerciseButtonTextActive,
-              ]}
-            >
-              {option.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Stats Panel */}
-      <View style={styles.statsPanel}>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Rep Count</Text>
-          <Text style={styles.statValue}>{repCount}</Text>
-          <TouchableOpacity style={styles.resetButton} onPress={resetRepCount}>
-            <Text style={styles.resetButtonText}>Reset</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Current Pose</Text>
-          <Text style={[styles.statValue, { fontSize: 16 }]}>{currentPose}</Text>
-          <Text style={styles.confidenceText}>{(confidence * 100).toFixed(1)}%</Text>
-        </View>
-
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Landmarks</Text>
-          <Text style={styles.statValue}>{landmarksCount}</Text>
-          <Text style={styles.landmarksText}>detected</Text>
-        </View>
-      </View>
-
-      {/* Camera Component */}
-      <View style={styles.cameraContainer}>
+      {/* Full-screen Camera */}
+      <View style={styles.fullscreenCameraContainer}>
         <MediaPipePoseCamera
           exerciseType={exerciseType}
           onPoseDetected={handlePoseDetected}
@@ -159,158 +154,99 @@ export const MediaPipeDemoScreen: React.FC<MediaPipeDemoScreenProps> = ({ naviga
         />
       </View>
 
-      {/* Debug Info */}
-      <ScrollView style={styles.debugPanel} contentContainerStyle={styles.debugContent}>
-        <Text style={styles.debugTitle}>Debug Information</Text>
-        <Text style={styles.debugText}>Exercise: {exerciseType}</Text>
-        <Text style={styles.debugText}>In Rep State: {isInRepState ? 'Yes' : 'No'}</Text>
-        <Text style={styles.debugText}>Landmarks Count: {landmarksCount}</Text>
-        <Text style={styles.debugText}>Current Pose: {currentPose}</Text>
-        <Text style={styles.debugText}>Confidence: {(confidence * 100).toFixed(2)}%</Text>
-        <Text style={styles.debugText}>Rep Count: {repCount}</Text>
-      </ScrollView>
-    </SafeAreaView>
+      {/* Overlay Controls */}
+      <View style={[styles.overlay, isLandscape && styles.overlayLandscape]}>
+        {/* Back Button - Top Left */}
+        <TouchableOpacity
+          style={[
+            styles.backButtonOverlay,
+            isLandscape && styles.backButtonLandscape
+          ]}
+          onPress={handleGoBack}
+        >
+          <Text style={styles.backButtonText}>✕</Text>
+        </TouchableOpacity>
+
+        {/* Rep Counter - Top Right */}
+        <View style={[
+          styles.repCounter,
+          isLandscape && styles.repCounterLandscape
+        ]}>
+          <Text style={styles.repCountValue}>{repCount}</Text>
+          <Text style={styles.repCountLabel}>REPS</Text>
+        </View>
+
+      </View>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  fullscreenContainer: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#000',
   },
-  header: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-    position: 'relative',
+  fullscreenCameraContainer: {
+    flex: 1,
   },
-  backButton: {
+  overlay: {
     position: 'absolute',
-    top: 16,
-    left: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     zIndex: 10,
   },
+  overlayLandscape: {
+    // Additional styles for landscape if needed
+  },
+  backButtonLandscape: {
+    top: 20,
+    left: 30,
+  },
+  repCounterLandscape: {
+    top: 20,
+    right: 30,
+  },
+  backButtonOverlay: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 11,
+  },
   backButtonText: {
-    fontSize: 16,
-    color: '#333',
-    fontWeight: '500',
-  },
-  title: {
+    color: '#fff',
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#333',
-    textAlign: 'center',
-    marginTop: 20,
   },
-  subtitle: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginTop: 4,
-  },
-  exerciseSelection: {
-    flexDirection: 'row',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: '#fff',
-    justifyContent: 'space-between',
-  },
-  exerciseButton: {
-    flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    marginHorizontal: 4,
-    borderRadius: 8,
-    backgroundColor: '#f0f0f0',
+  repCounter: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
     alignItems: 'center',
-  },
-  exerciseButtonActive: {
-    backgroundColor: '#4CAF50',
-  },
-  exerciseButtonText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#666',
-  },
-  exerciseButtonTextActive: {
-    color: '#fff',
-  },
-  statsPanel: {
-    flexDirection: 'row',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
+    paddingVertical: 10,
+    borderRadius: 25,
+    minWidth: 80,
+    zIndex: 11,
   },
-  statItem: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#666',
-    marginBottom: 4,
-  },
-  statValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  confidenceText: {
-    fontSize: 12,
+  repCountValue: {
     color: '#4CAF50',
-    marginTop: 2,
+    fontSize: 28,
+    fontWeight: 'bold',
+    textAlign: 'center',
   },
-  landmarksText: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 2,
-  },
-  resetButton: {
-    marginTop: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    backgroundColor: '#f44336',
-    borderRadius: 4,
-  },
-  resetButtonText: {
+  repCountLabel: {
     color: '#fff',
     fontSize: 12,
-    fontWeight: '500',
-  },
-  cameraContainer: {
-    flex: 1,
-    margin: 20,
-    borderRadius: 12,
-    overflow: 'hidden',
-    backgroundColor: '#000',
-  },
-  debugPanel: {
-    maxHeight: 120,
-    backgroundColor: '#000',
-    borderTopWidth: 1,
-    borderTopColor: '#333',
-  },
-  debugContent: {
-    padding: 16,
-  },
-  debugTitle: {
-    color: '#4CAF50',
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginBottom: 8,
-  },
-  debugText: {
-    color: '#fff',
-    fontSize: 12,
-    fontFamily: 'monospace',
-    marginBottom: 2,
+    textAlign: 'center',
+    marginTop: 2,
   },
 });

@@ -100,6 +100,9 @@ mobile/android/.externalNativeBuild/
 mobile/android/.cxx/
 mobile/android/local.properties
 
+# MediaPipe module build files
+mobile/modules/mediapipe-pose/android/build/
+
 # Metro
 mobile/.metro-health-check*
 

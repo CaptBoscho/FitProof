@@ -12,6 +12,7 @@ import mediaPipePose, {
   PoseType,
   ExerciseType,
 } from 'mediapipe-pose';
+import { CameraPreviewView } from './CameraPreviewView';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -169,15 +170,19 @@ export const MediaPipePoseCamera: React.FC<MediaPipePoseCameraProps> = ({
 
   return (
     <View style={styles.container}>
-      {/* Camera placeholder - native camera will be rendered here */}
+      {/* Native camera view */}
       <View style={styles.cameraContainer}>
-        <View style={styles.cameraPlaceholder}>
-          <Text style={styles.cameraText}>
-            {isLoading ? 'Initializing Camera...' :
-             error ? 'Camera Error' :
-             isInitialized ? 'Camera Active' : 'Camera Inactive'}
-          </Text>
-        </View>
+        {isInitialized ? (
+          <CameraPreviewView style={styles.cameraView} />
+        ) : (
+          <View style={styles.cameraPlaceholder}>
+            <Text style={styles.cameraText}>
+              {isLoading ? 'Initializing Camera...' :
+               error ? 'Camera Error' :
+               'Camera Inactive'}
+            </Text>
+          </View>
+        )}
 
         {/* Pose detection overlay */}
         {isInitialized && (
@@ -244,6 +249,9 @@ const styles = StyleSheet.create({
   cameraContainer: {
     flex: 1,
     position: 'relative',
+  },
+  cameraView: {
+    flex: 1,
   },
   cameraPlaceholder: {
     flex: 1,

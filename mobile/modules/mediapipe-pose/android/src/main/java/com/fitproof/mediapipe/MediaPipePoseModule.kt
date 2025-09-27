@@ -27,6 +27,7 @@ class MediaPipePoseModule(private val reactContext: ReactApplicationContext) : R
 
     private var currentExerciseMode: String = "pushup"
     private var isProcessing = false
+    private var cameraPreviewView: CameraPreviewView? = null
 
     // Performance monitoring
     private var frameCount = 0
@@ -61,11 +62,15 @@ class MediaPipePoseModule(private val reactContext: ReactApplicationContext) : R
 
     @ReactMethod
     fun stopCamera(promise: Promise) {
-        try {
-            cameraProvider?.unbindAll()
-            promise.resolve(null)
-        } catch (e: Exception) {
-            promise.reject("CAMERA_ERROR", "Failed to stop camera: ${e.message}", e)
+        // Run on main thread since camera operations need to be on main thread
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        handler.post {
+            try {
+                cameraProvider?.unbindAll()
+                promise.resolve(null)
+            } catch (e: Exception) {
+                promise.reject("CAMERA_ERROR", "Failed to stop camera: ${e.message}", e)
+            }
         }
     }
 
@@ -107,6 +112,10 @@ class MediaPipePoseModule(private val reactContext: ReactApplicationContext) : R
         currentExerciseMode = exercise
     }
 
+    fun setCameraPreviewView(previewView: CameraPreviewView) {
+        this.cameraPreviewView = previewView
+    }
+
     private fun startCameraCapture() {
         val preview = Preview.Builder().build()
         val imageAnalyzer = ImageAnalysis.Builder()
@@ -116,6 +125,11 @@ class MediaPipePoseModule(private val reactContext: ReactApplicationContext) : R
 
         imageAnalyzer.setAnalyzer(cameraExecutor) { imageProxy ->
             processImage(imageProxy)
+        }
+
+        // Bind preview to the camera preview view
+        cameraPreviewView?.let { previewView ->
+            preview.setSurfaceProvider(previewView.surfaceProvider)
         }
 
         val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA

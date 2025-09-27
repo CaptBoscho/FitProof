@@ -21,6 +21,7 @@
     "@react-navigation/stack": "^7.4.8",
     "expo": "~54.0.9",
     "expo-camera": "~17.0.8",
+    "expo-screen-orientation": "~9.0.7",
     "expo-status-bar": "~3.0.8",
     "graphql": "^16.11.0",
     "mediapipe-pose": "file:modules/mediapipe-pose",
