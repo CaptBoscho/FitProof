@@ -16,6 +16,7 @@ class PoseLandmarkOverlay @JvmOverloads constructor(
 
     private var results: PoseLandmarkerResult? = null
     private var pointPaint = Paint()
+    private var exerciseType: String = "pushup"
 
     companion object {
         private const val LANDMARK_STROKE_WIDTH = 12f
@@ -38,9 +39,11 @@ class PoseLandmarkOverlay @JvmOverloads constructor(
     fun setResults(
         poseLandmarkerResult: PoseLandmarkerResult?,
         imageHeight: Int,
-        imageWidth: Int
+        imageWidth: Int,
+        exerciseType: String = "pushup"
     ) {
         results = poseLandmarkerResult
+        this.exerciseType = exerciseType
 
         println("Overlay: viewSize=${width}x${height}, imageSize=${imageWidth}x${imageHeight}")
 
@@ -56,11 +59,15 @@ class PoseLandmarkOverlay @JvmOverloads constructor(
         super.draw(canvas)
 
         results?.let { poseLandmarkerResult ->
+            // Get exercise-specific landmarks to display
+            val relevantLandmarks = getRelevantLandmarks(exerciseType)
+
             // Draw individual landmark points
             for (landmark in poseLandmarkerResult.landmarks()) {
                 for ((index, normalizedLandmark) in landmark.withIndex()) {
-                    // Only draw landmarks with good visibility
-                    if (normalizedLandmark.visibility().isPresent &&
+                    // Only draw relevant landmarks for this exercise with good visibility
+                    if (relevantLandmarks.contains(index) &&
+                        normalizedLandmark.visibility().isPresent &&
                         normalizedLandmark.visibility().get() > 0.5f) {
 
                         // Convert normalized coordinates to view coordinates
@@ -94,6 +101,15 @@ class PoseLandmarkOverlay @JvmOverloads constructor(
                     }
                 }
             }
+        }
+    }
+
+    private fun getRelevantLandmarks(exerciseType: String): Set<Int> {
+        return when (exerciseType) {
+            "pushup" -> setOf(7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32)
+            "squat" -> setOf(11, 12, 23, 24, 25, 26, 27, 28, 31, 32)
+            "situp" -> setOf(7, 8, 11, 12, 23, 24, 25, 26, 27, 28, 29, 30)
+            else -> setOf() // Show no landmarks for unknown exercises
         }
     }
 

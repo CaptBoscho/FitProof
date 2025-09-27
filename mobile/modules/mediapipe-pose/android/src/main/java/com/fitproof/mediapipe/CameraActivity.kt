@@ -38,6 +38,7 @@ class CameraActivity : AppCompatActivity() {
     private var currentImageHeight = 0
     private var exerciseType: String = "pushup"
     private var repCount = 0
+    private lateinit var poseDetector: PoseDetector
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -55,6 +56,9 @@ class CameraActivity : AppCompatActivity() {
 
         // Get exercise type from intent
         exerciseType = intent.getStringExtra("EXERCISE_TYPE") ?: "pushup"
+
+        // Initialize pose detector for this exercise
+        poseDetector = PoseDetector(exerciseType)
 
         // Set orientation based on exercise type
         requestedOrientation = when (exerciseType) {
@@ -266,18 +270,24 @@ class CameraActivity : AppCompatActivity() {
             val firstPose = landmarks[0]
             println("MediaPipe: Detected pose with ${firstPose.size} landmarks")
 
-            // Log first few landmarks for debugging
-            for (i in 0 until minOf(5, firstPose.size)) {
-                val landmark = firstPose[i]
-                println("MediaPipe Landmark $i: x=${landmark.x()}, y=${landmark.y()}, z=${landmark.z()}, visibility=${landmark.visibility().orElse(0.0f)}")
+            // Analyze pose for exercise-specific detection
+            val poseState = poseDetector.detectPose(firstPose)
+
+            // Update rep count if it changed
+            if (poseState.repCount != repCount) {
+                updateRepCount(poseState.repCount)
             }
+
+            // Log pose analysis results
+            println("MediaPipe: Exercise=$exerciseType, Phase=${poseState.currentPhase}, Confidence=${poseState.confidence}, Reps=${poseState.repCount}")
 
             // Update the overlay with new pose results
             runOnUiThread {
                 overlayView.setResults(
                     result,
                     imageHeight = currentImageHeight,
-                    imageWidth = currentImageWidth
+                    imageWidth = currentImageWidth,
+                    exerciseType = exerciseType
                 )
             }
         } else {
