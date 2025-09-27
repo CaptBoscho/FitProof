@@ -128,8 +128,8 @@ class MediaPipePoseModule(private val reactContext: ReactApplicationContext) : R
         }
 
         // Bind preview to the camera preview view
-        cameraPreviewView?.let { previewView ->
-            preview.setSurfaceProvider(previewView.surfaceProvider)
+        cameraPreviewView?.let { cameraView ->
+            preview.setSurfaceProvider(cameraView.getPreviewView().surfaceProvider)
         }
 
         val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
