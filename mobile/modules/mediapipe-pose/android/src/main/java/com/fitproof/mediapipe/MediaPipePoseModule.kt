@@ -1,6 +1,7 @@
 package com.fitproof.mediapipe
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -27,7 +28,6 @@ class MediaPipePoseModule(private val reactContext: ReactApplicationContext) : R
 
     private var currentExerciseMode: String = "pushup"
     private var isProcessing = false
-    private var cameraPreviewView: CameraPreviewView? = null
 
     // Performance monitoring
     private var frameCount = 0
@@ -112,39 +112,21 @@ class MediaPipePoseModule(private val reactContext: ReactApplicationContext) : R
         currentExerciseMode = exercise
     }
 
-    fun setCameraPreviewView(previewView: CameraPreviewView) {
-        this.cameraPreviewView = previewView
+    @ReactMethod
+    fun openNativeCameraActivity(promise: Promise) {
+        try {
+            val intent = android.content.Intent(reactContext, CameraActivity::class.java)
+            intent.putExtra("EXERCISE_TYPE", currentExerciseMode)
+            reactContext.currentActivity?.startActivity(intent)
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("ACTIVITY_ERROR", "Failed to open native camera activity: ${e.message}", e)
+        }
     }
 
     private fun startCameraCapture() {
-        val preview = Preview.Builder().build()
-        val imageAnalyzer = ImageAnalysis.Builder()
-            .setTargetResolution(android.util.Size(1280, 720))
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .build()
-
-        imageAnalyzer.setAnalyzer(cameraExecutor) { imageProxy ->
-            processImage(imageProxy)
-        }
-
-        // Bind preview to the camera preview view
-        cameraPreviewView?.let { cameraView ->
-            preview.setSurfaceProvider(cameraView.getPreviewView().surfaceProvider)
-        }
-
-        val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
-
-        try {
-            cameraProvider?.unbindAll()
-            camera = cameraProvider?.bindToLifecycle(
-                reactContext.currentActivity as androidx.lifecycle.LifecycleOwner,
-                cameraSelector,
-                preview,
-                imageAnalyzer
-            )
-        } catch (e: Exception) {
-            sendEvent("onError", "Failed to bind camera: ${e.message}")
-        }
+        // This method is no longer used since we use the native activity
+        // Keeping it for backward compatibility but it does nothing
     }
 
     private fun processImage(imageProxy: ImageProxy) {
@@ -297,13 +279,7 @@ class MediaPipePoseModule(private val reactContext: ReactApplicationContext) : R
             .emit(eventName, data)
     }
 
-    // Extension function to convert ImageProxy to Bitmap
-    private fun ImageProxy.toBitmap(): android.graphics.Bitmap {
-        val buffer = planes[0].buffer
-        val bytes = ByteArray(buffer.remaining())
-        buffer.get(bytes)
-        return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-    }
+    // toBitmap() extension is now built into ImageProxy, so we don't need our own implementation
 
     override fun onCatalystInstanceDestroy() {
         super.onCatalystInstanceDestroy()

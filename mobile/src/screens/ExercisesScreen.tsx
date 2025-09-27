@@ -1,7 +1,8 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, Alert } from 'react-native';
 import { BaseScreenProps, Exercise } from '../types';
 import { CONFIG } from '../constants/config';
+import mediaPipePose from 'mediapipe-pose';
 
 interface ExercisesScreenProps extends BaseScreenProps {}
 
@@ -36,9 +37,24 @@ const MOCK_EXERCISES: Exercise[] = [
 ];
 
 export const ExercisesScreen: React.FC<ExercisesScreenProps> = ({ navigation }) => {
-  const handleExerciseSelect = (exercise: Exercise) => {
-    // Navigate to workout screen with selected exercise
-    navigation.navigate('Workout', { exerciseId: exercise.id });
+  const handleExerciseSelect = async (exercise: Exercise) => {
+    try {
+      // Map exercise name to MediaPipe exercise type
+      const exerciseType = exercise.name.toLowerCase() as 'pushup' | 'squat' | 'situp';
+
+      // Set the exercise mode in MediaPipe
+      mediaPipePose.setExerciseMode(exerciseType);
+
+      // Open the native camera activity
+      await mediaPipePose.openNativeCameraActivity();
+    } catch (error) {
+      console.error('Error opening native camera activity:', error);
+      Alert.alert(
+        'Error',
+        'Failed to open camera. Please try again.',
+        [{ text: 'OK' }]
+      );
+    }
   };
 
   const renderExerciseItem = ({ item }: { item: Exercise }) => {

@@ -33,6 +33,7 @@ interface MediaPipePoseModule {
   stopCamera(): Promise<void>;
   loadModel(modelPath: string): Promise<void>;
   setExerciseMode(exercise: ExerciseType): void;
+  openNativeCameraActivity(): Promise<void>;
 }
 
 const { MediaPipePose } = NativeModules;
@@ -87,6 +88,10 @@ class MediaPipePoseManager {
 
   setExerciseMode(exercise: ExerciseType): void {
     MediaPipePose.setExerciseMode(exercise);
+  }
+
+  async openNativeCameraActivity(): Promise<void> {
+    return MediaPipePose.openNativeCameraActivity();
   }
 
   // Event subscription methods

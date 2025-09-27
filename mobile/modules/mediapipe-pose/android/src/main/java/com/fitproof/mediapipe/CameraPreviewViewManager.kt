@@ -12,9 +12,8 @@ class CameraPreviewViewManager(private val reactContext: ReactApplicationContext
         val view = CameraPreviewView(reactContext)
         view.setReactContext(this.reactContext)
 
-        // Register this view with the MediaPipe module so it can bind the camera preview
-        val mediaPipeModule = this.reactContext.getNativeModule(MediaPipePoseModule::class.java)
-        mediaPipeModule?.setCameraPreviewView(view)
+        // Note: This view manager is no longer used since we moved to native activity
+        // Keeping for backward compatibility but without module registration
 
         return view
     }

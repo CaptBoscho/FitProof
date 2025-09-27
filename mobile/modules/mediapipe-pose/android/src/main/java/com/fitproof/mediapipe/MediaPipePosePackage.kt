@@ -11,6 +11,6 @@ class MediaPipePosePackage : ReactPackage {
     }
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {
-        return listOf(CameraPreviewViewManager(reactContext))
+        return emptyList()
     }
 }
