@@ -25,6 +25,10 @@ RCT_EXTERN_METHOD(loadModel:(NSString *)modelPath
 // Exercise mode setting
 RCT_EXTERN_METHOD(setExerciseMode:(NSString *)exercise)
 
+// Native camera activity
+RCT_EXTERN_METHOD(openNativeCameraActivity:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject)
+
 // Specify that this module supports events
 + (BOOL)requiresMainQueueSetup
 {

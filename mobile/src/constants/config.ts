@@ -1,8 +1,29 @@
+import { Platform } from 'react-native';
+
+// Helper function to get the correct API URL based on platform
+const getApiUrl = (port: number) => {
+  if (process.env.NODE_ENV !== 'development') {
+    return 'https://your-production-api.com';
+  }
+
+  // For iOS (both simulator and device), use IP address for now
+  if (Platform.OS === 'ios') {
+    const url = `http://10.0.0.132:${port}`;
+    console.log(`Using iOS URL: ${url}`);
+    return url;
+  }
+
+  // For simulators and Android, use localhost
+  const url = `http://localhost:${port}`;
+  console.log(`Using localhost URL: ${url}`);
+  return url;
+};
+
 // App configuration constants
 export const CONFIG = {
   // Backend API URLs - adjust based on your backend server
-  GRAPHQL_URL: process.env.NODE_ENV === 'development' ? 'http://localhost:4000/graphql' : 'https://your-production-api.com/graphql',
-  API_URL: process.env.NODE_ENV === 'development' ? 'http://localhost:4001' : 'https://your-production-api.com',
+  GRAPHQL_URL: process.env.NODE_ENV === 'development' ? `${getApiUrl(4000)}/graphql` : 'https://your-production-api.com/graphql',
+  API_URL: getApiUrl(4001),
 
   // App information
   APP_NAME: 'FitProof',

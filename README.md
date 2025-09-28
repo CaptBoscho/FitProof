@@ -36,8 +36,38 @@ cd ..
 npx expo run:ios             # Build & run on iOS simulator/device
 npx expo run:android         # Build & run on Android emulator/device
 ```
+**Backend connection issues (physical device):**
+### Android
+When running on a physical Android device, the app can't reach `localhost` on your development machine. Set up port forwarding:
+
+```bash
+# Forward backend ports to device
+/Users/corbin/Library/Android/sdk/platform-tools/adb reverse tcp:4000 tcp:4000
+/Users/corbin/Library/Android/sdk/platform-tools/adb reverse tcp:4001 tcp:4001
+
+# Verify device connection
+/Users/corbin/Library/Android/sdk/platform-tools/adb devices
+```
+
+This allows your device to access `localhost:4000` and `localhost:4001` as if they were running on the device itself.
+
+### iOS
 
 **⚠️ Development Build Required**: This app uses native MediaPipe modules and requires development builds. Cannot run in Expo Go.
+
+#### iOS Simulator
+```bash
+cd mobile
+npx expo run:ios
+```
+
+#### Physical iOS Device
+1. **Update backend host**: Get your computer's IP with `ipconfig getifaddr en0`, then update `src/constants/config.ts` line 10 to use your IP address instead of `10.0.0.132`
+2. **Run on device**:
+```bash
+cd mobile
+npx expo run:ios --device
+```
 
 ### Web Build
 ```bash

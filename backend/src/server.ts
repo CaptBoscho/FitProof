@@ -51,7 +51,7 @@ async function startServer() {
 
     // Start GraphQL server
     const { url } = await startStandaloneServer(server, {
-      listen: { port: PORT as number },
+      listen: { port: PORT as number, host: '0.0.0.0' },
       context: async ({ req }) => {
         // Add authentication context to GraphQL
         const authContext = createAuthContext(req as any);
@@ -67,9 +67,9 @@ async function startServer() {
     const restPort = parseInt(PORT as string) + 1;
     const restApp = createExpressApp();
 
-    restApp.listen(restPort, () => {
-      console.log(`🔗 REST endpoints available at http://localhost:${restPort}/auth/*`);
-      console.log(`💚 Health check available at http://localhost:${restPort}/health`);
+    restApp.listen(restPort, '0.0.0.0', () => {
+      console.log(`🔗 REST endpoints available at http://0.0.0.0:${restPort}/auth/*`);
+      console.log(`💚 Health check available at http://0.0.0.0:${restPort}/health`);
     });
 
   } catch (error) {

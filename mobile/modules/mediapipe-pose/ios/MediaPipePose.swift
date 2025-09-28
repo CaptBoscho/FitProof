@@ -97,6 +97,33 @@ class MediaPipePose: RCTEventEmitter {
         currentExerciseMode = exercise
     }
 
+    @objc
+    func openNativeCameraActivity(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else {
+                reject("SELF_REFERENCE_ERROR", "Failed to get self reference", nil)
+                return
+            }
+
+            do {
+                let storyboard = UIStoryboard(name: "Main", bundle: nil)
+                let cameraViewController = CameraViewController()
+                cameraViewController.exerciseType = self.currentExerciseMode
+                cameraViewController.modalPresentationStyle = .fullScreen
+
+                if let presentingViewController = RCTPresentedViewController() {
+                    presentingViewController.present(cameraViewController, animated: true) {
+                        resolve(nil)
+                    }
+                } else {
+                    reject("NO_PRESENTING_VC", "No presenting view controller found", nil)
+                }
+            } catch {
+                reject("CAMERA_VC_ERROR", "Failed to open native camera: \(error.localizedDescription)", error)
+            }
+        }
+    }
+
     // MARK: - Camera Setup
 
     private func setupCaptureSession() {
