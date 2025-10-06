@@ -13,6 +13,7 @@ Pod::Spec.new do |s|
   s.source       = { :git => "https://github.com/your-repo/fitproof.git", :tag => "#{s.version}" }
 
   s.source_files = "*.{h,m,swift}"
+  s.resources = "assets/**/*"
   s.requires_arc = true
   s.swift_version = '5.0'
 

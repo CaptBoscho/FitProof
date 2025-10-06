@@ -29,8 +29,6 @@ class PoseLandmarkOverlayView: UIView {
         self.results = poseLandmarkerResult
         self.exerciseType = exerciseType
 
-        print("iOS Overlay: viewSize=\(bounds.width)x\(bounds.height), imageSize=\(imageWidth)x\(imageHeight)")
-
         setNeedsDisplay()
     }
 
@@ -44,15 +42,44 @@ class PoseLandmarkOverlayView: UIView {
     override func draw(_ rect: CGRect) {
         super.draw(rect)
 
-        guard let context = UIGraphicsGetCurrentContext(),
-              let results = results else { return }
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+
+        // Draw test landmarks if no results
+        if results == nil {
+            // Draw test dots at corners and center to verify coordinate system
+            let testPoints = [
+                CGPoint(x: bounds.width * 0.25, y: bounds.height * 0.25), // Top-left area
+                CGPoint(x: bounds.width * 0.75, y: bounds.height * 0.25), // Top-right area
+                CGPoint(x: bounds.width * 0.5, y: bounds.height * 0.5),   // Center
+                CGPoint(x: bounds.width * 0.25, y: bounds.height * 0.75), // Bottom-left area
+                CGPoint(x: bounds.width * 0.75, y: bounds.height * 0.75), // Bottom-right area
+            ]
+
+            context.setFillColor(UIColor.cyan.cgColor)
+            for point in testPoints {
+                context.fillEllipse(in: CGRect(
+                    x: point.x - landmarkRadius,
+                    y: point.y - landmarkRadius,
+                    width: landmarkRadius * 2,
+                    height: landmarkRadius * 2
+                ))
+            }
+            return
+        }
 
         // Get exercise-specific landmarks to display
         let relevantLandmarks = getRelevantLandmarks(exerciseType: exerciseType)
 
-        // Draw individual landmark points
+        // Draw individual landmark points - safely unwrap results
+        guard let results = results else { return }
+
         for landmarks in results.landmarks {
             for (index, normalizedLandmark) in landmarks.enumerated() {
+                // Log face landmarks and low visibility relevant landmarks for debugging
+                if index < 5 || (relevantLandmarks.contains(index) && (normalizedLandmark.visibility?.floatValue ?? 0.0) < 0.7) {
+                    NSLog("Debug_Media: 👁️ Landmark %d: visibility=%.3f, relevant=%@", index, normalizedLandmark.visibility?.floatValue ?? 0.0, relevantLandmarks.contains(index) ? "YES" : "NO")
+                }
+
                 // Only draw relevant landmarks for this exercise with good visibility
                 if relevantLandmarks.contains(index) &&
                    normalizedLandmark.visibility != nil &&
@@ -66,22 +93,22 @@ class PoseLandmarkOverlayView: UIView {
                     let normalizedY: Float
 
                     if isLandscape {
-                        // In landscape mode: direct mapping with mirroring for front camera
-                        normalizedX = 1.0 - normalizedLandmark.x  // Mirror X for front camera
-                        normalizedY = normalizedLandmark.y
+                        // In landscape mode: front camera needs 180 degree rotation + mirror
+                        normalizedX = normalizedLandmark.x        // No mirror on X
+                        normalizedY = 1.0 - normalizedLandmark.y  // Mirror Y (flip upside down)
                     } else {
-                        // In portrait mode: swap X and Y due to camera rotation + mirror
-                        normalizedX = 1.0 - normalizedLandmark.y  // Swap and mirror: camera Y becomes screen X
-                        normalizedY = 1.0 - normalizedLandmark.x  // Swap and mirror: camera X becomes screen Y
+                        // In portrait mode: swap X and Y + 180 degree rotation for front camera
+                        normalizedX = 1.0 - normalizedLandmark.y  // Rotate 180: swap and mirror Y
+                        normalizedY = normalizedLandmark.x        // Rotate 180: swap X (no mirror on Y)
                     }
 
                     // Scale to view dimensions
                     let x = CGFloat(normalizedX) * bounds.width
                     let y = CGFloat(normalizedY) * bounds.height
 
-                    // Log first few landmarks for debugging
-                    if index < 3 {
-                        print("iOS Overlay Draw Landmark \(index): landscape=\(isLandscape), normalized(\(normalizedLandmark.x), \(normalizedLandmark.y)) -> mirrored(\(normalizedX), \(normalizedY)) -> screen(\(x), \(y))")
+                    // Log coordinate mapping for face landmarks to debug landscape/portrait positioning
+                    if index < 5 {
+                        NSLog("Debug_Media: 🎯 DRAWING Landmark %d: landscape=%@, normalized(%.3f, %.3f) -> mirrored(%.3f, %.3f) -> screen(%.1f, %.1f), bounds(%.0fx%.0f)", index, isLandscape ? "YES" : "NO", normalizedLandmark.x, normalizedLandmark.y, normalizedX, normalizedY, Float(x), Float(y), bounds.width, bounds.height)
                     }
 
                     // Draw landmark as a circle
@@ -102,7 +129,8 @@ class PoseLandmarkOverlayView: UIView {
     private func getRelevantLandmarks(exerciseType: String) -> Set<Int> {
         switch exerciseType {
         case "pushup":
-            return Set([7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32])
+            // Adding face landmarks (0-4) for testing landscape coordinate mapping
+            return Set([0, 1, 2, 3, 4, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32])
         case "squat":
             return Set([11, 12, 23, 24, 25, 26, 27, 28, 31, 32])
         case "situp":
@@ -114,6 +142,7 @@ class PoseLandmarkOverlayView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        print("iOS Overlay: Size changed to \(bounds.width)x\(bounds.height)")
+        // Size change logging disabled for normal operation
+        // NSLog("Debug_Media: iOS Overlay: Size changed to %.0fx%.0f", bounds.width, bounds.height)
     }
 }

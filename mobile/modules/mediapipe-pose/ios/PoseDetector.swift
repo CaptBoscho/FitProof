@@ -113,7 +113,8 @@ class PoseDetector {
         let keyLandmarks = [leftShoulder, rightShoulder, leftElbow, rightElbow, leftWrist, rightWrist]
         let confidence = calculateConfidence(landmarks: keyLandmarks)
 
-        print("PoseDetector iOS: Pushup - armAngle=\(avgArmAngle), phase=\(currentPhase), reps=\(repCount)")
+        // Detailed pose logging disabled for normal operation
+        // NSLog("Debug_Media: PoseDetector iOS: Pushup - armAngle=%.1f, phase=%@, reps=%d", avgArmAngle, currentPhase, repCount)
 
         return PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: repCount)
     }
@@ -147,7 +148,8 @@ class PoseDetector {
         let keyLandmarks = [leftHip, rightHip, leftKnee, rightKnee]
         let confidence = calculateConfidence(landmarks: keyLandmarks)
 
-        print("PoseDetector iOS: Squat - hipKneeRatio=\(hipKneeRatio), phase=\(currentPhase), reps=\(repCount)")
+        // Detailed pose logging disabled for normal operation
+        // NSLog("Debug_Media: PoseDetector iOS: Squat - hipKneeRatio=%.3f, phase=%@, reps=%d", hipKneeRatio, currentPhase, repCount)
 
         return PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: repCount)
     }
@@ -187,7 +189,8 @@ class PoseDetector {
         let keyLandmarks = [leftEar, rightEar, leftShoulder, rightShoulder, leftHip, rightHip]
         let confidence = calculateConfidence(landmarks: keyLandmarks)
 
-        print("PoseDetector iOS: Situp - torsoAngle=\(torsoAngle), phase=\(currentPhase), reps=\(repCount)")
+        // Detailed pose logging disabled for normal operation
+        // NSLog("Debug_Media: PoseDetector iOS: Situp - torsoAngle=%.1f, phase=%@, reps=%d", torsoAngle, currentPhase, repCount)
 
         return PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: repCount)
     }
@@ -221,7 +224,7 @@ class PoseDetector {
         if lastPhase == "down" && currentPhase == "up" && !isTransitioning {
             repCount += 1
             isTransitioning = true
-            print("PoseDetector iOS: Rep completed! Total reps: \(repCount)")
+            NSLog("Debug_Media: PoseDetector iOS: Rep completed! Total reps: %d", repCount)
         } else if currentPhase == "down" {
             isTransitioning = false
         }

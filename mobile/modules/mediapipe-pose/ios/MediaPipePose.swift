@@ -65,10 +65,10 @@ class MediaPipePose: RCTEventEmitter {
                 let options = PoseLandmarkerOptions()
                 // Use the model file from the app's main bundle
                 if let bundlePath = Bundle.main.path(forResource: "pose_landmarker_lite", ofType: "task") {
-                    print("MediaPipe: Found model at path: \(bundlePath)")
+                    NSLog("Debug_Media: MediaPipe: Found model at path: %@", bundlePath)
                     options.baseOptions.modelAssetPath = bundlePath
                 } else {
-                    print("MediaPipe: Model not found in bundle, using fallback path")
+                    NSLog("Debug_Media: MediaPipe: Model not found in bundle, using fallback path")
                     // Fallback: try direct asset path
                     options.baseOptions.modelAssetPath = "pose_landmarker_lite.task"
                 }
@@ -99,26 +99,33 @@ class MediaPipePose: RCTEventEmitter {
 
     @objc
     func openNativeCameraActivity(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+        NSLog("Debug_Media: 🚀 openNativeCameraActivity called from React Native")
         DispatchQueue.main.async { [weak self] in
             guard let self = self else {
+                NSLog("Debug_Media: ❌ Failed to get self reference")
                 reject("SELF_REFERENCE_ERROR", "Failed to get self reference", nil)
                 return
             }
 
+            NSLog("Debug_Media: MediaPipe iOS: Opening native camera activity for exercise: %@", self.currentExerciseMode)
+
             do {
-                let storyboard = UIStoryboard(name: "Main", bundle: nil)
                 let cameraViewController = CameraViewController()
                 cameraViewController.exerciseType = self.currentExerciseMode
                 cameraViewController.modalPresentationStyle = .fullScreen
 
                 if let presentingViewController = RCTPresentedViewController() {
+                    NSLog("Debug_Media: MediaPipe iOS: Presenting camera view controller")
                     presentingViewController.present(cameraViewController, animated: true) {
+                        NSLog("Debug_Media: MediaPipe iOS: Camera view controller presented successfully")
                         resolve(nil)
                     }
                 } else {
+                    NSLog("Debug_Media: MediaPipe iOS: No presenting view controller found")
                     reject("NO_PRESENTING_VC", "No presenting view controller found", nil)
                 }
             } catch {
+                NSLog("Debug_Media: MediaPipe iOS: Error creating camera view controller: %@", error.localizedDescription)
                 reject("CAMERA_VC_ERROR", "Failed to open native camera: \(error.localizedDescription)", error)
             }
         }
@@ -185,7 +192,7 @@ class MediaPipePose: RCTEventEmitter {
             let fps = Double(frameCount) / now.timeIntervalSince(lastFpsUpdate)
             let avgProcessingTime = processingTimes.reduce(0, +) / Double(processingTimes.count)
 
-            print("MediaPipe Performance - FPS: \\(fps:.1f), Avg Processing: \\(avgProcessingTime * 1000:.1f)ms")
+            NSLog("Debug_Media: MediaPipe Performance - FPS: %.1f, Avg Processing: %.1fms", fps, avgProcessingTime * 1000)
 
             frameCount = 0
             lastFpsUpdate = now

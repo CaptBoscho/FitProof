@@ -25,11 +25,16 @@ class CameraViewController: UIViewController {
     var exerciseType: String = "pushup"
     private var repCount: Int = 0
     private var poseDetector: PoseDetector?
+    private var isCleanedUp = false
 
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
         super.viewDidLoad()
+
+        NSLog("Debug_Media: Are you getting this? ----------------------------")
+        NSLog("Debug_Media: 🔥 CameraViewController viewDidLoad - Exercise: %@", exerciseType)
+        NSLog("Debug_Media: 🎬 Camera permissions status: %d", AVCaptureDevice.authorizationStatus(for: .video).rawValue)
 
         // Initialize pose detector for this exercise
         poseDetector = PoseDetector(exerciseType: exerciseType)
@@ -58,11 +63,18 @@ class CameraViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         startCamera()
+        updatePreviewLayerFrame()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updatePreviewLayerFrame()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        stopCamera()
+        NSLog("Debug_Media: 🔙 View will disappear - calling cleanup...")
+        cleanup()
     }
 
     override var prefersStatusBarHidden: Bool {
@@ -127,11 +139,11 @@ class CameraViewController: UIViewController {
         repCountLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(repCountLabel)
 
-        // Create landmark overlay
+        // Create landmark overlay (add first so it's behind buttons)
         overlayView = PoseLandmarkOverlayView()
         overlayView.backgroundColor = .clear
         overlayView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(overlayView)
+        view.insertSubview(overlayView, at: 0)
 
         // Setup constraints
         NSLayoutConstraint.activate([
@@ -156,21 +168,25 @@ class CameraViewController: UIViewController {
     }
 
     private func loadMediaPipeModel() {
+        NSLog("Debug_Media: MediaPipe iOS: Starting to load model...")
+
         processingQueue.async { [weak self] in
             guard let self = self else { return }
 
             do {
+                NSLog("Debug_Media: MediaPipe iOS: Creating PoseLandmarkerOptions...")
                 let options = PoseLandmarkerOptions()
 
                 // Use the model file from the app's main bundle
                 if let bundlePath = Bundle.main.path(forResource: "pose_landmarker_lite", ofType: "task") {
-                    print("MediaPipe iOS: Found model at path: \(bundlePath)")
+                    NSLog("Debug_Media: MediaPipe iOS: Found model at path: %@", bundlePath)
                     options.baseOptions.modelAssetPath = bundlePath
                 } else {
-                    print("MediaPipe iOS: Model not found in bundle, using fallback path")
+                    NSLog("Debug_Media: MediaPipe iOS: Model not found in bundle, using fallback path")
                     options.baseOptions.modelAssetPath = "pose_landmarker_lite.task"
                 }
 
+                NSLog("Debug_Media: MediaPipe iOS: Setting up options...")
                 options.runningMode = .liveStream
                 options.minPoseDetectionConfidence = 0.5
                 options.minPosePresenceConfidence = 0.5
@@ -178,14 +194,17 @@ class CameraViewController: UIViewController {
                 options.numPoses = 1
                 options.poseLandmarkerLiveStreamDelegate = self
 
+                NSLog("Debug_Media: MediaPipe iOS: Creating PoseLandmarker...")
                 self.poseLandmarker = try PoseLandmarker(options: options)
 
                 DispatchQueue.main.async {
-                    print("MediaPipe iOS: Model loaded successfully")
+                    NSLog("Debug_Media: MediaPipe iOS: Model loaded successfully!")
+                    NSLog("Debug_Media: 🎯 PoseLandmarker created: %@", self.poseLandmarker != nil ? "SUCCESS" : "FAILED")
                 }
             } catch {
                 DispatchQueue.main.async {
-                    print("MediaPipe iOS: Failed to load model: \(error.localizedDescription)")
+                    NSLog("Debug_Media: MediaPipe iOS: Failed to load model: %@", error.localizedDescription)
+                    NSLog("Debug_Media: MediaPipe iOS: Error details: %@", error.localizedDescription)
                     self.showAlert(title: "Error", message: "Failed to load MediaPipe model: \(error.localizedDescription)")
                 }
             }
@@ -224,13 +243,13 @@ class CameraViewController: UIViewController {
         // Create preview layer
         previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
         previewLayer?.videoGravity = .resizeAspectFill
-        previewLayer?.frame = view.bounds
 
         if let previewLayer = previewLayer {
             view.layer.insertSublayer(previewLayer, at: 0)
         }
 
         captureSession.commitConfiguration()
+        NSLog("Debug_Media: 🎬 Capture session setup completed: %@", captureSession != nil ? "SUCCESS" : "FAILED")
 
         // Set camera to maximum zoom out for widest field of view
         do {
@@ -238,26 +257,107 @@ class CameraViewController: UIViewController {
             camera.videoZoomFactor = camera.minAvailableVideoZoomFactor
             camera.unlockForConfiguration()
         } catch {
-            print("Failed to set zoom: \(error)")
+            NSLog("Debug_Media: Failed to set zoom: %@", error.localizedDescription)
         }
     }
 
     private func startCamera() {
         sessionQueue.async { [weak self] in
+            NSLog("Debug_Media: 🎬 Starting camera session...")
             self?.captureSession?.startRunning()
+            NSLog("Debug_Media: 🎬 Camera session started: %@", self?.captureSession?.isRunning == true ? "RUNNING" : "NOT_RUNNING")
         }
     }
 
     private func stopCamera() {
+        guard let captureSession = captureSession, captureSession.isRunning else {
+            NSLog("Debug_Media: 🎬 Camera session already stopped or nil")
+            return
+        }
+
         sessionQueue.async { [weak self] in
+            NSLog("Debug_Media: 🎬 Stopping camera session on background queue...")
             self?.captureSession?.stopRunning()
+            NSLog("Debug_Media: 🎬 Camera session stop requested")
+        }
+    }
+
+    private func updatePreviewLayerFrame() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let previewLayer = self.previewLayer else { return }
+
+            previewLayer.frame = self.view.bounds
+
+            // Set the correct video orientation based on device orientation
+            if let connection = previewLayer.connection {
+                let orientation = UIApplication.shared.statusBarOrientation
+                switch orientation {
+                case .portrait:
+                    connection.videoOrientation = .portrait
+                case .portraitUpsideDown:
+                    connection.videoOrientation = .portraitUpsideDown
+                case .landscapeLeft:
+                    connection.videoOrientation = .landscapeLeft
+                case .landscapeRight:
+                    connection.videoOrientation = .landscapeRight
+                default:
+                    connection.videoOrientation = .portrait
+                }
+            }
         }
     }
 
     // MARK: - Actions
 
     @objc private func backButtonTapped() {
-        dismiss(animated: true)
+        NSLog("Debug_Media: 🔙 Back button tapped - starting cleanup...")
+
+        // Comprehensive cleanup to prevent crashes
+        cleanup()
+
+        DispatchQueue.main.async { [weak self] in
+            NSLog("Debug_Media: 🔙 Dismissing view controller...")
+            self?.dismiss(animated: true) {
+                NSLog("Debug_Media: 🔙 View controller dismissed successfully")
+            }
+        }
+    }
+
+    private func cleanup() {
+        // Prevent multiple cleanup calls
+        guard !isCleanedUp else {
+            NSLog("Debug_Media: 🧹 ⚠️ Cleanup already performed, skipping...")
+            return
+        }
+
+        NSLog("Debug_Media: 🧹 Starting comprehensive cleanup...")
+        isCleanedUp = true
+
+        // Stop camera session
+        NSLog("Debug_Media: 🧹 Stopping camera session...")
+        stopCamera()
+        NSLog("Debug_Media: 🧹 Camera session stopped")
+
+        // Clear MediaPipe
+        NSLog("Debug_Media: 🧹 Clearing MediaPipe...")
+        poseLandmarker = nil
+        NSLog("Debug_Media: 🧹 MediaPipe cleared")
+
+        // Clear pose detector
+        NSLog("Debug_Media: 🧹 Clearing pose detector...")
+        poseDetector = nil
+        NSLog("Debug_Media: 🧹 Pose detector cleared")
+
+        // Clear overlay
+        NSLog("Debug_Media: 🧹 Clearing overlay...")
+        overlayView?.clear()
+        NSLog("Debug_Media: 🧹 Overlay cleared")
+
+        // Reset processing flags
+        NSLog("Debug_Media: 🧹 Resetting processing flags...")
+        isProcessing = false
+        NSLog("Debug_Media: 🧹 ✅ Cleanup completed successfully")
     }
 
     private func updateRepCount(_ newCount: Int) {
@@ -276,8 +376,8 @@ class CameraViewController: UIViewController {
     // MARK: - Cleanup
 
     deinit {
-        stopCamera()
-        poseLandmarker = nil
+        NSLog("Debug_Media: 🧹 CameraViewController deinit - final cleanup")
+        cleanup()
     }
 }
 
@@ -285,8 +385,15 @@ class CameraViewController: UIViewController {
 
 extension CameraViewController: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard !isProcessing,
-              let poseLandmarker = poseLandmarker else { return }
+        guard !isProcessing else {
+            NSLog("Debug_Media: MediaPipe iOS: Skipping frame - already processing")
+            return
+        }
+
+        guard let poseLandmarker = poseLandmarker else {
+            NSLog("Debug_Media: MediaPipe iOS: No pose landmarker available")
+            return
+        }
 
         isProcessing = true
 
@@ -302,7 +409,7 @@ extension CameraViewController: AVCaptureVideoDataOutputSampleBufferDelegate {
 
             try poseLandmarker.detectAsync(image: image, timestampInMilliseconds: timestampMs)
         } catch {
-            print("MediaPipe iOS: Failed to process frame: \(error.localizedDescription)")
+            NSLog("Debug_Media: MediaPipe iOS: Failed to process frame: %@", error.localizedDescription)
         }
 
         isProcessing = false
@@ -313,9 +420,14 @@ extension CameraViewController: AVCaptureVideoDataOutputSampleBufferDelegate {
 
 extension CameraViewController: PoseLandmarkerLiveStreamDelegate {
     func poseLandmarker(_ poseLandmarker: PoseLandmarker, didFinishDetection result: PoseLandmarkerResult?, timestampInMilliseconds: Int, error: Error?) {
+        // Safety check: ignore callbacks if we're cleaned up
+        guard self.poseLandmarker != nil else {
+            NSLog("Debug_Media: 🔍 Ignoring MediaPipe callback - already cleaned up")
+            return
+        }
 
         if let error = error {
-            print("MediaPipe iOS: Pose detection error: \(error.localizedDescription)")
+            NSLog("Debug_Media: MediaPipe iOS: Pose detection error: %@", error.localizedDescription)
             return
         }
 
@@ -328,8 +440,6 @@ extension CameraViewController: PoseLandmarkerLiveStreamDelegate {
             return
         }
 
-        print("MediaPipe iOS: Detected pose with \(landmarks.count) landmarks")
-
         // Analyze pose for exercise-specific detection
         if let poseDetector = poseDetector {
             let poseState = poseDetector.detectPose(landmarks: landmarks)
@@ -339,8 +449,10 @@ extension CameraViewController: PoseLandmarkerLiveStreamDelegate {
                 updateRepCount(poseState.repCount)
             }
 
-            // Log pose analysis results
-            print("MediaPipe iOS: Exercise=\(exerciseType), Phase=\(poseState.currentPhase), Confidence=\(poseState.confidence), Reps=\(poseState.repCount)")
+            // Log rep count changes only
+            if poseState.repCount != repCount {
+                NSLog("Debug_Media: 💪 Rep completed! Exercise=%@, Phase=%@, Total Reps=%d", exerciseType, poseState.currentPhase, poseState.repCount)
+            }
         }
 
         // Update the overlay with new pose results
