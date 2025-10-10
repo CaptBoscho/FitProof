@@ -20,6 +20,12 @@ class CameraViewController: UIViewController {
     private var backButton: UIButton!
     private var repCountLabel: UILabel!
     private var overlayView: PoseLandmarkOverlayView!
+    private var countdownLabel: UILabel!
+
+    // Countdown state
+    private var countdownTimer: Timer?
+    private var countdownValue: Int = 5
+    private var isCountdownActive: Bool = true
 
     // Exercise tracking
     var exerciseType: String = "pushup"
@@ -64,6 +70,7 @@ class CameraViewController: UIViewController {
         super.viewDidAppear(animated)
         startCamera()
         updatePreviewLayerFrame()
+        startCountdown()
     }
 
     override func viewDidLayoutSubviews() {
@@ -139,6 +146,18 @@ class CameraViewController: UIViewController {
         repCountLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(repCountLabel)
 
+        // Create countdown label (center of screen)
+        countdownLabel = UILabel()
+        countdownLabel.text = "5"
+        countdownLabel.textColor = .white
+        countdownLabel.font = UIFont.systemFont(ofSize: 120, weight: .bold)
+        countdownLabel.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        countdownLabel.textAlignment = .center
+        countdownLabel.layer.cornerRadius = 75
+        countdownLabel.clipsToBounds = true
+        countdownLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(countdownLabel)
+
         // Create landmark overlay (add first so it's behind buttons)
         overlayView = PoseLandmarkOverlayView()
         overlayView.backgroundColor = .clear
@@ -158,6 +177,12 @@ class CameraViewController: UIViewController {
             repCountLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
             repCountLabel.heightAnchor.constraint(equalToConstant: 40),
             repCountLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
+
+            // Countdown label (center)
+            countdownLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            countdownLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            countdownLabel.widthAnchor.constraint(equalToConstant: 150),
+            countdownLabel.heightAnchor.constraint(equalToConstant: 150),
 
             // Overlay (fullscreen)
             overlayView.topAnchor.constraint(equalTo: view.topAnchor),
@@ -349,6 +374,12 @@ class CameraViewController: UIViewController {
         poseDetector = nil
         NSLog("Debug_Media: 🧹 Pose detector cleared")
 
+        // Clear countdown timer
+        NSLog("Debug_Media: 🧹 Clearing countdown timer...")
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        NSLog("Debug_Media: 🧹 Countdown timer cleared")
+
         // Clear overlay
         NSLog("Debug_Media: 🧹 Clearing overlay...")
         overlayView?.clear()
@@ -371,6 +402,66 @@ class CameraViewController: UIViewController {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
+    }
+
+    // MARK: - Countdown Methods
+
+    private func startCountdown() {
+        countdownValue = 5
+        isCountdownActive = true
+        countdownLabel.isHidden = false
+        countdownLabel.text = String(countdownValue)
+
+        NSLog("Debug_Media: Starting 5-second countdown before exercise detection")
+
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+            self?.updateCountdown()
+        }
+    }
+
+    private func updateCountdown() {
+        countdownValue -= 1
+
+        if countdownValue > 0 {
+            countdownLabel.text = String(countdownValue)
+
+            // Add animation for visual feedback
+            UIView.animate(withDuration: 0.3, animations: {
+                self.countdownLabel.transform = CGAffineTransform(scaleX: 1.2, y: 1.2)
+            }) { _ in
+                UIView.animate(withDuration: 0.3) {
+                    self.countdownLabel.transform = CGAffineTransform.identity
+                }
+            }
+        } else {
+            // Countdown finished
+            finishCountdown()
+        }
+    }
+
+    private func finishCountdown() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        isCountdownActive = false
+
+        // Show "GO!" briefly then hide
+        countdownLabel.text = "GO!"
+        countdownLabel.backgroundColor = UIColor.green.withAlphaComponent(0.7)
+
+        NSLog("Debug_Media: Countdown finished - exercise detection now active")
+
+        UIView.animate(withDuration: 0.5, animations: {
+            self.countdownLabel.transform = CGAffineTransform(scaleX: 1.5, y: 1.5)
+        }) { _ in
+            UIView.animate(withDuration: 0.5, delay: 0.5, options: [], animations: {
+                self.countdownLabel.alpha = 0
+            }) { _ in
+                self.countdownLabel.isHidden = true
+                self.countdownLabel.alpha = 1
+                self.countdownLabel.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+                self.countdownLabel.transform = CGAffineTransform.identity
+            }
+        }
     }
 
     // MARK: - Cleanup
@@ -440,8 +531,8 @@ extension CameraViewController: PoseLandmarkerLiveStreamDelegate {
             return
         }
 
-        // Analyze pose for exercise-specific detection
-        if let poseDetector = poseDetector {
+        // Only analyze pose if countdown is finished
+        if !isCountdownActive, let poseDetector = poseDetector {
             let poseState = poseDetector.detectPose(landmarks: landmarks)
 
             // Update rep count if it changed
@@ -453,6 +544,8 @@ extension CameraViewController: PoseLandmarkerLiveStreamDelegate {
             if poseState.repCount != repCount {
                 NSLog("Debug_Media: 💪 Rep completed! Exercise=%@, Phase=%@, Total Reps=%d", exerciseType, poseState.currentPhase, poseState.repCount)
             }
+        } else if isCountdownActive {
+            NSLog("Debug_Media: Countdown active - skipping pose analysis")
         }
 
         // Update the overlay with new pose results

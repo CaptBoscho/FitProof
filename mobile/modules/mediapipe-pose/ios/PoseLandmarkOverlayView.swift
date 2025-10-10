@@ -129,8 +129,7 @@ class PoseLandmarkOverlayView: UIView {
     private func getRelevantLandmarks(exerciseType: String) -> Set<Int> {
         switch exerciseType {
         case "pushup":
-            // Adding face landmarks (0-4) for testing landscape coordinate mapping
-            return Set([0, 1, 2, 3, 4, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32])
+            return Set([7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32])
         case "squat":
             return Set([11, 12, 23, 24, 25, 26, 27, 28, 31, 32])
         case "situp":

@@ -21,6 +21,8 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.poselandmarker.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import android.os.Handler
+import android.os.Looper
 
 class CameraActivity : AppCompatActivity() {
 
@@ -28,6 +30,7 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var overlayView: PoseLandmarkOverlay
     private lateinit var backButton: ImageButton
     private lateinit var repCountText: TextView
+    private lateinit var countdownText: TextView
     private var camera: Camera? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -39,6 +42,11 @@ class CameraActivity : AppCompatActivity() {
     private var exerciseType: String = "pushup"
     private var repCount = 0
     private lateinit var poseDetector: PoseDetector
+
+    // Countdown state
+    private var countdownValue = 5
+    private var isCountdownActive = true
+    private val countdownHandler = Handler(Looper.getMainLooper())
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -106,6 +114,15 @@ class CameraActivity : AppCompatActivity() {
             setBackgroundColor(Color.parseColor("#80000000")) // Semi-transparent black
         }
 
+        // Create countdown text
+        countdownText = TextView(this).apply {
+            text = "$countdownValue"
+            textSize = 72f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#80000000")) // Semi-transparent black
+        }
+
         // Layout parameters for back button (top-left)
         val backButtonParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -124,11 +141,20 @@ class CameraActivity : AppCompatActivity() {
             setMargins(0, 32, 32, 0)
         }
 
+        // Layout parameters for countdown (center)
+        val countdownParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.CENTER
+        }
+
         // Add views to frame layout
         frameLayout.addView(previewView)
         frameLayout.addView(overlayView)
         frameLayout.addView(backButton, backButtonParams)
         frameLayout.addView(repCountText, repCountParams)
+        frameLayout.addView(countdownText, countdownParams)
 
         setContentView(frameLayout)
 
@@ -144,6 +170,9 @@ class CameraActivity : AppCompatActivity() {
         } else {
             requestPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
+
+        // Start countdown when activity is created
+        startCountdown()
     }
 
     private fun loadMediaPipeModel() {
@@ -264,24 +293,47 @@ class CameraActivity : AppCompatActivity() {
         }
     }
 
+    private fun startCountdown() {
+        countdownHandler.post(object : Runnable {
+            override fun run() {
+                runOnUiThread {
+                    if (countdownValue > 0) {
+                        countdownText.text = "$countdownValue"
+                        countdownValue--
+                        countdownHandler.postDelayed(this, 1000)
+                    } else {
+                        countdownText.visibility = android.view.View.GONE
+                        isCountdownActive = false
+                        println("Debug_Media: Countdown finished, pose detection enabled")
+                    }
+                }
+            }
+        })
+    }
+
     private fun handlePoseResult(result: PoseLandmarkerResult) {
         val landmarks = result.landmarks()
         if (landmarks.isNotEmpty()) {
             val firstPose = landmarks[0]
             println("MediaPipe: Detected pose with ${firstPose.size} landmarks")
 
-            // Analyze pose for exercise-specific detection
-            val poseState = poseDetector.detectPose(firstPose)
+            // Only analyze pose if countdown is finished
+            if (!isCountdownActive) {
+                // Analyze pose for exercise-specific detection
+                val poseState = poseDetector.detectPose(firstPose)
 
-            // Update rep count if it changed
-            if (poseState.repCount != repCount) {
-                updateRepCount(poseState.repCount)
+                // Update rep count if it changed
+                if (poseState.repCount != repCount) {
+                    updateRepCount(poseState.repCount)
+                }
+
+                // Log pose analysis results
+                println("MediaPipe: Exercise=$exerciseType, Phase=${poseState.currentPhase}, Confidence=${poseState.confidence}, Reps=${poseState.repCount}")
+            } else {
+                println("Debug_Media: Countdown active, skipping pose analysis")
             }
 
-            // Log pose analysis results
-            println("MediaPipe: Exercise=$exerciseType, Phase=${poseState.currentPhase}, Confidence=${poseState.confidence}, Reps=${poseState.repCount}")
-
-            // Update the overlay with new pose results
+            // Update the overlay with new pose results (always show landmarks)
             runOnUiThread {
                 overlayView.setResults(
                     result,
@@ -310,6 +362,7 @@ class CameraActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        countdownHandler.removeCallbacksAndMessages(null)
         cameraExecutor.shutdown()
         processingExecutor.shutdown()
         poseLandmarker?.close()
