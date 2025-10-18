@@ -30,6 +30,7 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var overlayView: PoseLandmarkOverlay
     private lateinit var backButton: ImageButton
     private lateinit var repCountText: TextView
+    private lateinit var poseStatusText: TextView
     private lateinit var countdownText: TextView
     private var camera: Camera? = null
     private var cameraProvider: ProcessCameraProvider? = null
@@ -114,6 +115,15 @@ class CameraActivity : AppCompatActivity() {
             setBackgroundColor(Color.parseColor("#80000000")) // Semi-transparent black
         }
 
+        // Create pose status text
+        poseStatusText = TextView(this).apply {
+            text = "Pose: --"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            setPadding(24)
+            setBackgroundColor(Color.parseColor("#80000000")) // Semi-transparent black
+        }
+
         // Create countdown text
         countdownText = TextView(this).apply {
             text = "$countdownValue"
@@ -141,6 +151,15 @@ class CameraActivity : AppCompatActivity() {
             setMargins(0, 32, 32, 0)
         }
 
+        // Layout parameters for pose status (below rep counter)
+        val poseStatusParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.END
+            setMargins(0, 80, 32, 0) // Below rep counter
+        }
+
         // Layout parameters for countdown (center)
         val countdownParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -154,6 +173,7 @@ class CameraActivity : AppCompatActivity() {
         frameLayout.addView(overlayView)
         frameLayout.addView(backButton, backButtonParams)
         frameLayout.addView(repCountText, repCountParams)
+        frameLayout.addView(poseStatusText, poseStatusParams)
         frameLayout.addView(countdownText, countdownParams)
 
         setContentView(frameLayout)
@@ -322,6 +342,17 @@ class CameraActivity : AppCompatActivity() {
                 // Analyze pose for exercise-specific detection
                 val poseState = poseDetector.detectPose(firstPose)
 
+                // Only show pose status if all required landmarks are visible (full body visible)
+                if (poseDetector.areRequiredLandmarksVisible()) {
+                    runOnUiThread {
+                        poseStatusText.text = "Pose: ${poseState.currentPhase}"
+                    }
+                } else {
+                    runOnUiThread {
+                        poseStatusText.text = "Pose: partial"
+                    }
+                }
+
                 // Update rep count if it changed
                 if (poseState.repCount != repCount) {
                     updateRepCount(poseState.repCount)
@@ -331,6 +362,9 @@ class CameraActivity : AppCompatActivity() {
                 println("MediaPipe: Exercise=$exerciseType, Phase=${poseState.currentPhase}, Confidence=${poseState.confidence}, Reps=${poseState.repCount}")
             } else {
                 println("Debug_Media: Countdown active, skipping pose analysis")
+                runOnUiThread {
+                    poseStatusText.text = "Pose: --"
+                }
             }
 
             // Update the overlay with new pose results (always show landmarks)

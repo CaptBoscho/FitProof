@@ -65,8 +65,6 @@ class PoseDetector(private val exerciseType: String) {
         private const val MIN_CONFIDENCE = 0.7f
         private const val PUSHUP_ANGLE_THRESHOLD_DOWN = 90f  // Degrees
         private const val PUSHUP_ANGLE_THRESHOLD_UP = 160f   // Degrees
-        private const val SQUAT_HIP_KNEE_RATIO_UP = 1.02f   // Hip above knee (standing) - ratio > 1.02
-        private const val SQUAT_HIP_KNEE_RATIO_DOWN = 0.95f // Hip at/below knee (squatting) - ratio < 0.95
 
         // Pushup validation thresholds (from TypeScript model)
         private const val LEG_ANGLE_MIN_THRESHOLD = 120f    // Minimum leg straightness
@@ -77,6 +75,10 @@ class PoseDetector(private val exerciseType: String) {
         private const val SQUAT_LEG_STRAIGHT_THRESHOLD = 150f  // End position leg straightness
         private const val SQUAT_LEG_BEND_THRESHOLD = 105f      // Bottom position leg bend
         private const val FOOT_STABILITY_THRESHOLD = 0.05f     // Maximum foot movement
+
+        // Squat phase detection thresholds (angle-based)
+        private const val SQUAT_ANGLE_UP = 160f      // Standing position (leg nearly straight)
+        private const val SQUAT_ANGLE_DOWN = 110f    // Squat bottom position (leg bent)
     }
 
     private var lastPhase = "up"
@@ -175,24 +177,37 @@ class PoseDetector(private val exerciseType: String) {
         val rightHip = landmarks[LandmarkIndices.RIGHT_HIP]
         val leftKnee = landmarks[LandmarkIndices.LEFT_KNEE]
         val rightKnee = landmarks[LandmarkIndices.RIGHT_KNEE]
+        val leftAnkle = landmarks[LandmarkIndices.LEFT_ANKLE]
+        val rightAnkle = landmarks[LandmarkIndices.RIGHT_ANKLE]
 
         // Choose the better side for analysis (supports side view)
         val betterSideIndices = chooseBetterSquatSide()
         val usingLeftSide = betterSideIndices.contains(23) // contains left hip
 
-        val hipY = if (usingLeftSide) leftHip.y() else rightHip.y()
-        val kneeY = if (usingLeftSide) leftKnee.y() else rightKnee.y()
-        val hipKneeRatio = hipY / kneeY
-
-        // Determine current phase based on hip-knee relationship
-        // NOTE: In camera coordinates Y=0 is top, Y=1 is bottom
-        // When standing: hip Y < knee Y (hip higher on screen), ratio < 1
-        // When squatting: hip Y ≈ knee Y (hip lowers), ratio ≈ 1
-        val currentPhase = when {
-            hipKneeRatio > SQUAT_HIP_KNEE_RATIO_UP -> "up"     // Hip above knee (standing) - high ratio
-            hipKneeRatio < SQUAT_HIP_KNEE_RATIO_DOWN -> "down" // Hip at/below knee (squatting) - low ratio
-            else -> "mid"                                       // Transition
+        // Calculate leg angle (hip-knee-ankle)
+        val legAngle = if (usingLeftSide) {
+            calculateAngle(leftHip, leftKnee, leftAnkle)
+        } else {
+            calculateAngle(rightHip, rightKnee, rightAnkle)
         }
+
+        // Determine current phase based on leg angle
+        // When standing: leg is straight (~160-180 degrees)
+        // When squatting: leg is bent (~90-110 degrees)
+        val currentPhase = when {
+            legAngle > SQUAT_ANGLE_UP -> "up"    // Standing - leg straight
+            legAngle < SQUAT_ANGLE_DOWN -> "down"  // Squatting - leg bent
+            else -> "mid"                          // Transition
+        }
+
+        // Debug logging for squat detection
+        val sideName = if (usingLeftSide) "LEFT" else "RIGHT"
+        println("Debug_Squat: Android Squat Analysis (using $sideName side)")
+        println("Debug_Squat: Left Hip Y=${leftHip.y()}, Right Hip Y=${rightHip.y()}")
+        println("Debug_Squat: Left Knee Y=${leftKnee.y()}, Right Knee Y=${rightKnee.y()}")
+        println("Debug_Squat: Left Ankle Y=${leftAnkle.y()}, Right Ankle Y=${rightAnkle.y()}")
+        println("Debug_Squat: Leg Angle=$legAngle (thresholds: up>$SQUAT_ANGLE_UP, down<$SQUAT_ANGLE_DOWN)")
+        println("Debug_Squat: Phase Detected=$currentPhase, Last Phase=$lastPhase, Transitioning=$isTransitioning")
 
         // Track frames for validation
         trackFrameForValidation(currentFrame, currentPhase)
@@ -200,10 +215,13 @@ class PoseDetector(private val exerciseType: String) {
         // Count reps and validate
         val (newRepCount, validationResult) = updateRepCountWithValidation(currentPhase)
 
-        // Calculate confidence
-        val confidence = calculateConfidence(listOf(leftHip, rightHip, leftKnee, rightKnee))
-
-        println("PoseDetector: Squat - hipKneeRatio=$hipKneeRatio, phase=$currentPhase, reps=$newRepCount")
+        // Calculate confidence using selected side landmarks
+        val keyLandmarks = if (usingLeftSide) {
+            listOf(leftHip, leftKnee, leftAnkle)
+        } else {
+            listOf(rightHip, rightKnee, rightAnkle)
+        }
+        val confidence = calculateConfidence(keyLandmarks)
 
         return PoseState(
             exerciseType = exerciseType,
@@ -275,7 +293,7 @@ class PoseDetector(private val exerciseType: String) {
         }
     }
 
-    private fun areRequiredLandmarksVisible(): Boolean {
+    fun areRequiredLandmarksVisible(): Boolean {
         val landmarks = currentLandmarks ?: return false
         val visibilityThreshold = 0.5f  // Lowered for side view compatibility
 
@@ -345,27 +363,31 @@ class PoseDetector(private val exerciseType: String) {
     }
 
     private fun chooseBetterSquatSide(): List<Int> {
-        val landmarks = currentLandmarks ?: return listOf(23, 24, 25, 26) // fallback to all
+        val landmarks = currentLandmarks ?: return listOf(11, 12, 23, 24, 25, 26, 27, 28) // fallback to all
 
-        // Calculate visibility for each side
+        // Calculate visibility for each side (shoulder, hip, knee, ankle required for proper squat form)
+        val leftShoulderVis = if (landmarks[11].visibility().isPresent) landmarks[11].visibility().get() else 0.0f
         val leftHipVis = if (landmarks[23].visibility().isPresent) landmarks[23].visibility().get() else 0.0f
         val leftKneeVis = if (landmarks[25].visibility().isPresent) landmarks[25].visibility().get() else 0.0f
-        val leftSideVis = (leftHipVis + leftKneeVis) / 2.0f
+        val leftAnkleVis = if (landmarks[27].visibility().isPresent) landmarks[27].visibility().get() else 0.0f
+        val leftSideVis = (leftShoulderVis + leftHipVis + leftKneeVis + leftAnkleVis) / 4.0f
 
+        val rightShoulderVis = if (landmarks[12].visibility().isPresent) landmarks[12].visibility().get() else 0.0f
         val rightHipVis = if (landmarks[24].visibility().isPresent) landmarks[24].visibility().get() else 0.0f
         val rightKneeVis = if (landmarks[26].visibility().isPresent) landmarks[26].visibility().get() else 0.0f
-        val rightSideVis = (rightHipVis + rightKneeVis) / 2.0f
+        val rightAnkleVis = if (landmarks[28].visibility().isPresent) landmarks[28].visibility().get() else 0.0f
+        val rightSideVis = (rightShoulderVis + rightHipVis + rightKneeVis + rightAnkleVis) / 4.0f
 
-        println("PoseDetector: Side visibility - Left: %.2f (hip: %.2f, knee: %.2f), Right: %.2f (hip: %.2f, knee: %.2f)".format(
-            leftSideVis, leftHipVis, leftKneeVis, rightSideVis, rightHipVis, rightKneeVis))
+        println("Debug_Squat: Side visibility - Left: %.2f (shoulder: %.2f, hip: %.2f, knee: %.2f, ankle: %.2f), Right: %.2f (shoulder: %.2f, hip: %.2f, knee: %.2f, ankle: %.2f)".format(
+            leftSideVis, leftShoulderVis, leftHipVis, leftKneeVis, leftAnkleVis, rightSideVis, rightShoulderVis, rightHipVis, rightKneeVis, rightAnkleVis))
 
         // Choose the side with better average visibility
         return if (leftSideVis > rightSideVis) {
-            println("PoseDetector: Using LEFT side landmarks")
-            listOf(23, 25) // left hip, left knee
+            println("Debug_Squat: Using LEFT side landmarks (shoulder, hip, knee, ankle)")
+            listOf(11, 23, 25, 27) // left shoulder, left hip, left knee, left ankle
         } else {
-            println("PoseDetector: Using RIGHT side landmarks")
-            listOf(24, 26) // right hip, right knee
+            println("Debug_Squat: Using RIGHT side landmarks (shoulder, hip, knee, ankle)")
+            listOf(12, 24, 26, 28) // right shoulder, right hip, right knee, right ankle
         }
     }
 
@@ -403,14 +425,34 @@ class PoseDetector(private val exerciseType: String) {
     private fun trackFrameForValidation(frame: FrameData, currentPhase: String) {
         if (exerciseType != "pushup" && exerciseType != "squat") return
 
-        // Start recording when transitioning to "down"
+        // Only proceed if all required landmarks are visible
+        if (!areRequiredLandmarksVisible()) {
+            // If we were recording and lose visibility, stop recording
+            if (isRecordingRep) {
+                if (exerciseType == "squat") {
+                    println("Debug_Squat: Lost required landmark visibility during rep - canceling recording")
+                } else {
+                    println("Debug_Media: Lost required landmark visibility during rep - canceling recording")
+                }
+                isRecordingRep = false
+                frameBuffer.clear()
+            }
+            return
+        }
+
+        // Start recording when transitioning to "down" with full visibility
         if (!isRecordingRep && currentPhase == "down" && lastPhase == "up") {
+            if (exerciseType == "squat") {
+                println("Debug_Squat: Starting rep recording with full visibility (up → down)")
+            } else {
+                println("Debug_Media: Starting rep recording with full visibility (up → down)")
+            }
             isRecordingRep = true
             repStartTime = frame.timestamp
             frameBuffer.clear()
         }
 
-        // Add frame to buffer if recording
+        // Add frame to buffer if recording (only frames with full visibility)
         if (isRecordingRep) {
             frameBuffer.add(frame)
         }

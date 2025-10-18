@@ -40,6 +40,8 @@ struct AngleData {
 struct LandmarkStats {
     var minY: Float = Float.greatestFiniteMagnitude
     var maxY: Float = -Float.greatestFiniteMagnitude
+    var minX: Float = Float.greatestFiniteMagnitude
+    var maxX: Float = -Float.greatestFiniteMagnitude
 }
 
 struct ValidationResult {
@@ -80,8 +82,6 @@ class PoseDetector {
     private let minConfidence: Float = 0.7
     private let pushupAngleThresholdDown: Float = 90.0  // Degrees
     private let pushupAngleThresholdUp: Float = 160.0   // Degrees
-    private let squatHipKneeRatioUp: Float = 1.02       // Hip above knee (standing) - ratio > 1.02
-    private let squatHipKneeRatioDown: Float = 0.95     // Hip at/below knee (squatting) - ratio < 0.95
 
     // Pushup validation thresholds (from TypeScript model)
     private let legAngleMinThreshold: Float = 120.0     // Minimum leg straightness
@@ -92,6 +92,10 @@ class PoseDetector {
     private let squatLegStraightThreshold: Float = 150.0  // End position leg straightness
     private let squatLegBendThreshold: Float = 105.0      // Bottom position leg bend
     private let footStabilityThreshold: Float = 0.05     // Maximum foot movement
+
+    // Squat phase detection thresholds (angle-based)
+    private let squatAngleUp: Float = 160.0      // Standing position (leg nearly straight)
+    private let squatAngleDown: Float = 110.0    // Squat bottom position (leg bent)
 
     // MARK: - Properties
     private let exerciseType: String
@@ -210,32 +214,29 @@ class PoseDetector {
         let rightHip = landmarks[LandmarkIndices.rightHip]
         let leftKnee = landmarks[LandmarkIndices.leftKnee]
         let rightKnee = landmarks[LandmarkIndices.rightKnee]
+        let leftAnkle = landmarks[LandmarkIndices.leftAnkle]
+        let rightAnkle = landmarks[LandmarkIndices.rightAnkle]
 
         // Choose the better side for analysis (supports side view)
         let betterSideIndices = chooseBetterSquatSide()
         let usingLeftSide = betterSideIndices.contains(23) // contains left hip
 
-        let hipY: Float
-        let kneeY: Float
+        // Calculate leg angle (hip-knee-ankle)
+        let legAngle: Float
         if usingLeftSide {
-            hipY = leftHip.y
-            kneeY = leftKnee.y
+            legAngle = calculateAngle(point1: leftHip, point2: leftKnee, point3: leftAnkle)
         } else {
-            hipY = rightHip.y
-            kneeY = rightKnee.y
+            legAngle = calculateAngle(point1: rightHip, point2: rightKnee, point3: rightAnkle)
         }
 
-        let hipKneeRatio = hipY / kneeY
-
-        // Determine current phase based on hip-knee relationship
-        // NOTE: In camera coordinates Y=0 is top, Y=1 is bottom
-        // When standing: hip Y < knee Y (hip higher on screen), ratio < 1
-        // When squatting: hip Y ≈ knee Y (hip lowers), ratio ≈ 1
+        // Determine current phase based on leg angle
+        // When standing: leg is straight (~160-180 degrees)
+        // When squatting: leg is bent (~90-110 degrees)
         let currentPhase: String
-        if hipKneeRatio > squatHipKneeRatioUp {
-            currentPhase = "up"    // Hip above knee (standing) - high ratio
-        } else if hipKneeRatio < squatHipKneeRatioDown {
-            currentPhase = "down"  // Hip at/below knee (squatting) - low ratio
+        if legAngle > squatAngleUp {
+            currentPhase = "up"    // Standing - leg straight
+        } else if legAngle < squatAngleDown {
+            currentPhase = "down"  // Squatting - leg bent
         } else {
             currentPhase = "mid"   // Transition
         }
@@ -245,19 +246,16 @@ class PoseDetector {
         NSLog("Debug_Squat: iOS Squat Analysis (using %@ side)", sideName)
         NSLog("Debug_Squat: Left Hip Y=%.3f, Right Hip Y=%.3f", leftHip.y, rightHip.y)
         NSLog("Debug_Squat: Left Knee Y=%.3f, Right Knee Y=%.3f", leftKnee.y, rightKnee.y)
-        NSLog("Debug_Squat: Selected %@ Hip Y=%.3f, Knee Y=%.3f", sideName, hipY, kneeY)
-        NSLog("Debug_Squat: Hip/Knee Ratio=%.3f (thresholds: down<%.2f, up>%.2f)", hipKneeRatio, squatHipKneeRatioDown, squatHipKneeRatioUp)
+        NSLog("Debug_Squat: Left Ankle Y=%.3f, Right Ankle Y=%.3f", leftAnkle.y, rightAnkle.y)
+        NSLog("Debug_Squat: Leg Angle=%.1f (thresholds: up>%.0f, down<%.0f)", legAngle, squatAngleUp, squatAngleDown)
         NSLog("Debug_Squat: Phase Detected=%@, Last Phase=%@, Transitioning=%@", currentPhase, lastPhase, isTransitioning ? "YES" : "NO")
 
         // Count reps on phase transitions (no validation for squat)
         let (newRepCount, _) = updateRepCountWithValidation(currentPhase: currentPhase)
 
         // Calculate confidence using selected side landmarks
-        let keyLandmarks = usingLeftSide ? [leftHip, leftKnee] : [rightHip, rightKnee]
+        let keyLandmarks = usingLeftSide ? [leftHip, leftKnee, leftAnkle] : [rightHip, rightKnee, rightAnkle]
         let confidence = calculateConfidence(landmarks: keyLandmarks)
-
-        // Detailed pose logging disabled for normal operation
-        // NSLog("Debug_Media: PoseDetector iOS: Squat - hipKneeRatio=%.3f, phase=%@, reps=%d", hipKneeRatio, currentPhase, newRepCount)
 
         return PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: newRepCount)
     }
@@ -327,7 +325,7 @@ class PoseDetector {
         }
     }
 
-    private func areRequiredLandmarksVisible() -> Bool {
+    func areRequiredLandmarksVisible() -> Bool {
         guard let landmarks = currentLandmarks else { return false }
 
         let requiredIndices: [Int]
@@ -397,27 +395,31 @@ class PoseDetector {
     }
 
     private func chooseBetterSquatSide() -> [Int] {
-        guard let landmarks = currentLandmarks else { return [23, 24, 25, 26] } // fallback to all
+        guard let landmarks = currentLandmarks else { return [11, 12, 23, 24, 25, 26, 27, 28] } // fallback to all
 
-        // Calculate visibility for each side
+        // Calculate visibility for each side (shoulder, hip, knee, ankle required for proper squat form)
+        let leftShoulderVis = landmarks[11].visibility?.floatValue ?? 0.0
         let leftHipVis = landmarks[23].visibility?.floatValue ?? 0.0
         let leftKneeVis = landmarks[25].visibility?.floatValue ?? 0.0
-        let leftSideVis = (leftHipVis + leftKneeVis) / 2.0
+        let leftAnkleVis = landmarks[27].visibility?.floatValue ?? 0.0
+        let leftSideVis = (leftShoulderVis + leftHipVis + leftKneeVis + leftAnkleVis) / 4.0
 
+        let rightShoulderVis = landmarks[12].visibility?.floatValue ?? 0.0
         let rightHipVis = landmarks[24].visibility?.floatValue ?? 0.0
         let rightKneeVis = landmarks[26].visibility?.floatValue ?? 0.0
-        let rightSideVis = (rightHipVis + rightKneeVis) / 2.0
+        let rightAnkleVis = landmarks[28].visibility?.floatValue ?? 0.0
+        let rightSideVis = (rightShoulderVis + rightHipVis + rightKneeVis + rightAnkleVis) / 4.0
 
-        NSLog("Debug_Squat: Side visibility - Left: %.2f (hip: %.2f, knee: %.2f), Right: %.2f (hip: %.2f, knee: %.2f)",
-              leftSideVis, leftHipVis, leftKneeVis, rightSideVis, rightHipVis, rightKneeVis)
+        NSLog("Debug_Squat: Side visibility - Left: %.2f (shoulder: %.2f, hip: %.2f, knee: %.2f, ankle: %.2f), Right: %.2f (shoulder: %.2f, hip: %.2f, knee: %.2f, ankle: %.2f)",
+              leftSideVis, leftShoulderVis, leftHipVis, leftKneeVis, leftAnkleVis, rightSideVis, rightShoulderVis, rightHipVis, rightKneeVis, rightAnkleVis)
 
         // Choose the side with better average visibility
         if leftSideVis > rightSideVis {
-            NSLog("Debug_Squat: Using LEFT side landmarks")
-            return [23, 25] // left hip, left knee
+            NSLog("Debug_Squat: Using LEFT side landmarks (shoulder, hip, knee, ankle)")
+            return [11, 23, 25, 27] // left shoulder, left hip, left knee, left ankle
         } else {
-            NSLog("Debug_Squat: Using RIGHT side landmarks")
-            return [24, 26] // right hip, right knee
+            NSLog("Debug_Squat: Using RIGHT side landmarks (shoulder, hip, knee, ankle)")
+            return [12, 24, 26, 28] // right shoulder, right hip, right knee, right ankle
         }
     }
 
@@ -426,14 +428,34 @@ class PoseDetector {
     private func trackFrameForValidation(frame: FrameData, currentPhase: String) {
         guard exerciseType == "pushup" || exerciseType == "squat" else { return }
 
-        // Start recording when transitioning to "down"
+        // Only proceed if all required landmarks are visible
+        guard areRequiredLandmarksVisible() else {
+            // If we were recording and lose visibility, stop recording
+            if isRecordingRep {
+                if exerciseType == "squat" {
+                    NSLog("Debug_Squat: Lost required landmark visibility during rep - canceling recording")
+                } else {
+                    NSLog("Debug_Media: Lost required landmark visibility during rep - canceling recording")
+                }
+                isRecordingRep = false
+                frameBuffer.removeAll()
+            }
+            return
+        }
+
+        // Start recording when transitioning to "down" with full visibility
         if !isRecordingRep && currentPhase == "down" && lastPhase == "up" {
+            if exerciseType == "squat" {
+                NSLog("Debug_Squat: Starting rep recording with full visibility (up → down)")
+            } else {
+                NSLog("Debug_Media: Starting rep recording with full visibility (up → down)")
+            }
             isRecordingRep = true
             repStartTime = frame.timestamp
             frameBuffer.removeAll()
         }
 
-        // Add frame to buffer if recording
+        // Add frame to buffer if recording (only frames with full visibility)
         if isRecordingRep {
             frameBuffer.append(frame)
         }
@@ -672,6 +694,7 @@ class PoseDetector {
         var legAngleData = AngleData()
         var shoulderStats = LandmarkStats()
         var hipStats = LandmarkStats()
+        var kneeStats = LandmarkStats()
         var footStats = LandmarkStats()
 
         for (index, frame) in frames.enumerated() {
@@ -705,14 +728,26 @@ class PoseDetector {
             // Update landmark stats
             let shoulderIndex = isLeftLeg ? LandmarkIndices.leftShoulder : LandmarkIndices.rightShoulder
             let hipIndex = isLeftLeg ? LandmarkIndices.leftHip : LandmarkIndices.rightHip
+            let kneeIndex = isLeftLeg ? LandmarkIndices.leftKnee : LandmarkIndices.rightKnee
             let footIndex = isLeftLeg ? LandmarkIndices.leftFootIndex : LandmarkIndices.rightFootIndex
 
+            // Track Y coordinates (vertical position)
             shoulderStats.minY = min(shoulderStats.minY, frame.landmarks[shoulderIndex].y)
             shoulderStats.maxY = max(shoulderStats.maxY, frame.landmarks[shoulderIndex].y)
             hipStats.minY = min(hipStats.minY, frame.landmarks[hipIndex].y)
             hipStats.maxY = max(hipStats.maxY, frame.landmarks[hipIndex].y)
+            kneeStats.minY = min(kneeStats.minY, frame.landmarks[kneeIndex].y)
+            kneeStats.maxY = max(kneeStats.maxY, frame.landmarks[kneeIndex].y)
             footStats.minY = min(footStats.minY, frame.landmarks[footIndex].y)
             footStats.maxY = max(footStats.maxY, frame.landmarks[footIndex].y)
+
+            // Track X coordinates (horizontal position) for alignment validation
+            shoulderStats.minX = min(shoulderStats.minX, frame.landmarks[shoulderIndex].x)
+            shoulderStats.maxX = max(shoulderStats.maxX, frame.landmarks[shoulderIndex].x)
+            hipStats.minX = min(hipStats.minX, frame.landmarks[hipIndex].x)
+            hipStats.maxX = max(hipStats.maxX, frame.landmarks[hipIndex].x)
+            kneeStats.minX = min(kneeStats.minX, frame.landmarks[kneeIndex].x)
+            kneeStats.maxX = max(kneeStats.maxX, frame.landmarks[kneeIndex].x)
         }
 
         // Validate according to the original TypeScript logic
@@ -720,6 +755,7 @@ class PoseDetector {
             legAngleData: legAngleData,
             shoulderStats: shoulderStats,
             hipStats: hipStats,
+            kneeStats: kneeStats,
             footStats: footStats
         )
     }
@@ -744,6 +780,7 @@ class PoseDetector {
         legAngleData: AngleData,
         shoulderStats: LandmarkStats,
         hipStats: LandmarkStats,
+        kneeStats: LandmarkStats,
         footStats: LandmarkStats
     ) -> ValidationResult {
         // 1. Check standing position (shoulder above hip)
@@ -751,17 +788,31 @@ class PoseDetector {
             return ValidationResult(isValid: false, message: "Stand up")
         }
 
-        // 2. Check leg end position (straightness at top)
+        // 2. Check shoulder alignment (shoulders should stay aligned between hips and knees horizontally)
+        let shoulderCenterX = (shoulderStats.minX + shoulderStats.maxX) / 2.0
+        let hipCenterX = (hipStats.minX + hipStats.maxX) / 2.0
+        let kneeCenterX = (kneeStats.minX + kneeStats.maxX) / 2.0
+
+        // Allow some tolerance for natural movement
+        let alignmentTolerance: Float = 0.1
+        let minExpectedX = min(hipCenterX, kneeCenterX) - alignmentTolerance
+        let maxExpectedX = max(hipCenterX, kneeCenterX) + alignmentTolerance
+
+        if shoulderCenterX < minExpectedX || shoulderCenterX > maxExpectedX {
+            return ValidationResult(isValid: false, message: "Keep shoulders aligned above your legs")
+        }
+
+        // 3. Check leg end position (straightness at top)
         if legAngleData.final <= squatLegStraightThreshold {
             return ValidationResult(isValid: false, message: "Straighten legs more at the top of the squat")
         }
 
-        // 3. Check leg depth (bend at bottom)
+        // 4. Check leg depth (bend at bottom)
         if legAngleData.min >= squatLegBendThreshold {
             return ValidationResult(isValid: false, message: "Bend legs more at the bottom of the squat")
         }
 
-        // 4. Check foot stability (feet stay on ground)
+        // 5. Check foot stability (feet stay on ground)
         if footStats.minY < footStats.maxY - footStabilityThreshold {
             return ValidationResult(isValid: false, message: "Keep feet on the ground")
         }

@@ -19,6 +19,7 @@ class CameraViewController: UIViewController {
     // UI Elements
     private var backButton: UIButton!
     private var repCountLabel: UILabel!
+    private var poseStatusLabel: UILabel!
     private var overlayView: PoseLandmarkOverlayView!
     private var countdownLabel: UILabel!
 
@@ -146,6 +147,18 @@ class CameraViewController: UIViewController {
         repCountLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(repCountLabel)
 
+        // Create pose status label
+        poseStatusLabel = UILabel()
+        poseStatusLabel.text = "Pose: --"
+        poseStatusLabel.textColor = .white
+        poseStatusLabel.font = UIFont.systemFont(ofSize: 20, weight: .medium)
+        poseStatusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        poseStatusLabel.textAlignment = .center
+        poseStatusLabel.layer.cornerRadius = 8
+        poseStatusLabel.clipsToBounds = true
+        poseStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(poseStatusLabel)
+
         // Create countdown label (center of screen)
         countdownLabel = UILabel()
         countdownLabel.text = "5"
@@ -177,6 +190,12 @@ class CameraViewController: UIViewController {
             repCountLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
             repCountLabel.heightAnchor.constraint(equalToConstant: 40),
             repCountLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
+
+            // Pose status (below rep counter)
+            poseStatusLabel.topAnchor.constraint(equalTo: repCountLabel.bottomAnchor, constant: 8),
+            poseStatusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            poseStatusLabel.heightAnchor.constraint(equalToConstant: 35),
+            poseStatusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
 
             // Countdown label (center)
             countdownLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -535,6 +554,17 @@ extension CameraViewController: PoseLandmarkerLiveStreamDelegate {
         if !isCountdownActive, let poseDetector = poseDetector {
             let poseState = poseDetector.detectPose(landmarks: landmarks)
 
+            // Only show pose status if all required landmarks are visible (full body visible)
+            if poseDetector.areRequiredLandmarksVisible() {
+                DispatchQueue.main.async { [weak self] in
+                    self?.poseStatusLabel.text = "Pose: \(poseState.currentPhase)"
+                }
+            } else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.poseStatusLabel.text = "Pose: partial"
+                }
+            }
+
             // Update rep count if it changed
             if poseState.repCount != repCount {
                 updateRepCount(poseState.repCount)
@@ -546,6 +576,9 @@ extension CameraViewController: PoseLandmarkerLiveStreamDelegate {
             }
         } else if isCountdownActive {
             NSLog("Debug_Media: Countdown active - skipping pose analysis")
+            DispatchQueue.main.async { [weak self] in
+                self?.poseStatusLabel.text = "Pose: --"
+            }
         }
 
         // Update the overlay with new pose results
