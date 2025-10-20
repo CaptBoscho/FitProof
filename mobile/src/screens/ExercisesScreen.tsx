@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { BaseScreenProps, Exercise } from '../types';
 import { CONFIG } from '../constants/config';
 import mediaPipePose from 'mediapipe-pose';
@@ -57,12 +57,12 @@ export const ExercisesScreen: React.FC<ExercisesScreenProps> = ({ navigation }) 
     }
   };
 
-  const renderExerciseItem = ({ item }: { item: Exercise }) => {
+  const renderExerciseItem = (item: Exercise) => {
     const exerciseConfig =
       CONFIG.EXERCISES[item.name.toUpperCase() as keyof typeof CONFIG.EXERCISES];
 
     return (
-      <TouchableOpacity style={styles.exerciseCard} onPress={() => handleExerciseSelect(item)}>
+      <TouchableOpacity key={item.id} style={styles.exerciseCard} onPress={() => handleExerciseSelect(item)}>
         <View
           style={[
             styles.exerciseIcon,
@@ -87,24 +87,26 @@ export const ExercisesScreen: React.FC<ExercisesScreenProps> = ({ navigation }) 
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Select Exercise</Text>
-        <Text style={styles.subtitle}>Choose your workout</Text>
-      </View>
-
-      <FlatList
-        data={MOCK_EXERCISES}
-        renderItem={renderExerciseItem}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContainer}
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
-      />
+      >
+        <View style={styles.header}>
+          <Text style={styles.title}>Select Exercise</Text>
+          <Text style={styles.subtitle}>Choose your workout</Text>
+        </View>
 
-      <View style={styles.footerInfo}>
-        <Text style={styles.footerText}>
-          💡 Tip: Position your camera to capture your full body for best results
-        </Text>
-      </View>
+        <View style={styles.listContainer}>
+          {MOCK_EXERCISES.map(renderExerciseItem)}
+        </View>
+
+        <View style={styles.footerInfo}>
+          <Text style={styles.footerText}>
+            💡 Tip: Position your camera to capture your full body for best results
+          </Text>
+        </View>
+      </ScrollView>
     </View>
   );
 };
@@ -113,6 +115,13 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: CONFIG.COLORS.BACKGROUND,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: 20,
   },
   header: {
     padding: 20,

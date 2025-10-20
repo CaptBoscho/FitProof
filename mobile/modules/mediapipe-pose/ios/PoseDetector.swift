@@ -80,8 +80,13 @@ class PoseDetector {
 
     // MARK: - Constants
     private let minConfidence: Float = 0.7
-    private let pushupAngleThresholdDown: Float = 90.0  // Degrees
-    private let pushupAngleThresholdUp: Float = 160.0   // Degrees
+
+    // Pushup phase detection thresholds (angle-based)
+    private let pushupArmAngleUp: Float = 160.0         // Arms straight (up position)
+    private let pushupArmAngleDown: Float = 105.0       // Arms bent (down position) - PRIMARY METHOD
+    private let pushupLegStraightMin: Float = 120.0     // Minimum leg straightness for proper form (invalidates if less)
+    private let pushupLegKneeDownMax: Float = 100.0     // Maximum leg angle when knees are down
+    private let pushupShoulderDropPercent: Float = 40.0 // Minimum shoulder drop % for down position (backup method)
 
     // Pushup validation thresholds (from TypeScript model)
     private let legAngleMinThreshold: Float = 120.0     // Minimum leg straightness
@@ -104,10 +109,19 @@ class PoseDetector {
     private var isTransitioning: Bool = false
     private var currentLandmarks: [NormalizedLandmark]?
 
-    // Frame tracking for pushup validation
-    private var frameBuffer: [FrameData] = []
-    private var isRecordingRep: Bool = false
-    private var repStartTime: TimeInterval = 0
+    // Frame tracking for pushup validation (COMMENTED OUT - using state machine instead)
+    // private var frameBuffer: [FrameData] = []
+    // private var isRecordingRep: Bool = false
+    // private var repStartTime: TimeInterval = 0
+    // private var hadLegAngleViolation: Bool = false  // Track if legs bent too much during rep
+
+    // State machine for rep counting (simpler approach)
+    private var recordedUp: Bool = false      // Have we seen a valid up position?
+    private var recordedDown: Bool = false    // Have we seen a valid down position after up?
+
+    // Shoulder drop tracking for pushup down position (alternative method)
+    private var shoulderYAtUp: Float? = nil         // Shoulder Y position when arms are straight (up)
+    private var wristYAtUp: Float? = nil            // Wrist Y position when arms are straight (up)
 
     // MARK: - Initialization
 
@@ -150,6 +164,19 @@ class PoseDetector {
     // MARK: - Exercise-Specific Detection
 
     private func detectPushupPose(landmarks: [NormalizedLandmark]) -> PoseState {
+        // Check if all required landmarks are visible FIRST
+        guard areRequiredLandmarksVisible() else {
+            NSLog("Debug_Pushup: Required landmarks not visible - cannot detect pose")
+            return PoseState(
+                exerciseType: exerciseType,
+                currentPhase: "unknown",
+                confidence: 0.0,
+                repCount: repCount,
+                isValidRep: false,
+                validationMessage: "Required landmarks not visible"
+            )
+        }
+
         // Convert landmarks to our format for tracking
         let currentFrame = FrameData(
             landmarks: landmarks.map { LandmarkData(x: $0.x, y: $0.y, visibility: $0.visibility?.floatValue ?? 0.0) },
@@ -163,48 +190,189 @@ class PoseDetector {
         let rightElbow = landmarks[LandmarkIndices.rightElbow]
         let leftWrist = landmarks[LandmarkIndices.leftWrist]
         let rightWrist = landmarks[LandmarkIndices.rightWrist]
+        let leftHip = landmarks[LandmarkIndices.leftHip]
+        let rightHip = landmarks[LandmarkIndices.rightHip]
+        let leftKnee = landmarks[LandmarkIndices.leftKnee]
+        let rightKnee = landmarks[LandmarkIndices.rightKnee]
+        let leftAnkle = landmarks[LandmarkIndices.leftAnkle]
+        let rightAnkle = landmarks[LandmarkIndices.rightAnkle]
 
-        // Choose the better arm for analysis (supports side view)
-        let betterArmIndices = chooseBetterPushupSide()
-        let usingLeftArm = betterArmIndices.contains(11) // contains left shoulder
+        // Choose the better side for analysis (supports side view)
+        let betterSideIndices = chooseBetterPushupSide()
+        let usingLeftSide = betterSideIndices.contains(11) // contains left shoulder
 
+        // Calculate arm angle (shoulder-elbow-wrist)
         let armAngle: Float
-        if usingLeftArm {
+        if usingLeftSide {
             armAngle = calculateAngle(point1: leftShoulder, point2: leftElbow, point3: leftWrist)
         } else {
             armAngle = calculateAngle(point1: rightShoulder, point2: rightElbow, point3: rightWrist)
         }
 
-        // Determine current phase based on arm angle
-        let currentPhase: String
-        if armAngle < pushupAngleThresholdDown {
-            currentPhase = "down"
-        } else if armAngle > pushupAngleThresholdUp {
-            currentPhase = "up"
+        // Calculate leg angle (hip-knee-ankle) to ensure legs stay straight
+        let legAngle: Float
+        if usingLeftSide {
+            legAngle = calculateAngle(point1: leftHip, point2: leftKnee, point3: leftAnkle)
         } else {
-            currentPhase = "mid"
+            legAngle = calculateAngle(point1: rightHip, point2: rightKnee, point3: rightAnkle)
         }
 
-        // Track frames for validation
-        trackFrameForValidation(frame: currentFrame, currentPhase: currentPhase)
+        // Check if knees are touching the ground using LEG ANGLE (primary method)
+        // When knees are down: leg angle is very small (~80-100°)
+        // When knees are up: leg angle is larger (~140-180°)
+        let kneesDownByAngle = legAngle < pushupLegKneeDownMax
 
-        // Count reps and validate
-        let (newRepCount, validationResult) = updateRepCountWithValidation(currentPhase: currentPhase)
+        // ALTERNATIVE: Ground line Y-coordinate check (currently disabled, but kept for future use)
+        // In camera coordinates: Y=0 is TOP, Y=1 is BOTTOM
+        // When knees are UP (proper form): knee Y > ground line (knee further from camera)
+        // When knees are DOWN: knee Y < ground line (knee closer to camera/ground)
+        let kneeY = usingLeftSide ? leftKnee.y : rightKnee.y
+        let wristY = usingLeftSide ? leftWrist.y : rightWrist.y
+        let ankleY = usingLeftSide ? leftAnkle.y : rightAnkle.y
+        let groundLineY = max(wristY, ankleY)
+        let kneesDownByYCoord = kneeY < groundLineY  // INVERTED: smaller Y = closer to ground
 
-        // Calculate confidence using selected arm landmarks
-        let keyLandmarks = usingLeftArm ? [leftShoulder, leftElbow, leftWrist] : [rightShoulder, rightElbow, rightWrist]
+        // Use leg angle as primary detection method
+        let kneesDown = kneesDownByAngle
+
+        // Track shoulder Y position when in up position (for alternative down detection)
+        let shoulderY = usingLeftSide ? leftShoulder.y : rightShoulder.y
+
+        // Capture shoulder and wrist Y when arms are straight (up position)
+        if armAngle > pushupArmAngleUp && legAngle >= pushupLegStraightMin {
+            shoulderYAtUp = shoulderY
+            wristYAtUp = wristY
+        }
+
+        // Calculate shoulder drop percentage (alternative method for detecting down)
+        // NOTE: In camera coordinates during pushup, shoulder Y DECREASES (moves closer to camera)
+        var shoulderDropPercent: Float = 0.0
+        var isDownByShoulderDrop = false
+        if let upShoulderY = shoulderYAtUp, let upWristY = wristYAtUp {
+            // Total possible drop distance (from shoulder at up to wrist at up)
+            // Since wrist is typically higher on screen (smaller Y), this will be negative
+            let totalDropDistance = abs(upWristY - upShoulderY)
+
+            if totalDropDistance > 0 {
+                // Current drop (how much shoulder has moved toward wrist from up position)
+                // When doing pushup, shoulder Y decreases (moves up on screen/closer to camera)
+                let currentDrop = abs(shoulderY - upShoulderY)
+
+                // Calculate percentage (0% = at up position, 100% = at wrist level)
+                shoulderDropPercent = (currentDrop / totalDropDistance) * 100.0
+
+                // Check if shoulder has dropped enough
+                isDownByShoulderDrop = shoulderDropPercent >= pushupShoulderDropPercent
+            }
+        }
+
+        // Track leg angle violations during rep recording (COMMENTED OUT - using state machine)
+        // if isRecordingRep && exerciseType == "pushup" {
+        //     if legAngle < pushupLegStraightMin && !kneesDown {
+        //         NSLog("Debug_Pushup: ⚠️ Leg angle violation during rep: %.1f < %.0f", legAngle, pushupLegStraightMin)
+        //         hadLegAngleViolation = true
+        //     }
+        // }
+
+        // Determine current phase based on arm angle and form
+        // PRIMARY: Use arm angle ONLY (shoulder drop kept for reference but not used)
+        let isDownByArmAngle = armAngle < pushupArmAngleDown
+        let isDown = isDownByArmAngle  // Only use arm angle for down detection
+
+        let currentPhase: String
+        if kneesDown {
+            currentPhase = "kneeDown"
+        } else if legAngle < pushupLegStraightMin {
+            currentPhase = "mid" // Legs not straight enough
+        } else if isDown {
+            currentPhase = "down" // Arms bent (low position) - detected by ARM ANGLE
+        } else if armAngle > pushupArmAngleUp {
+            currentPhase = "up" // Arms straight (high position)
+        } else {
+            currentPhase = "mid" // Transition
+        }
+
+        // State machine for pushup rep counting
+        if exerciseType == "pushup" {
+            if currentPhase == "up" {
+                if !recordedUp {
+                    // First time seeing up position
+                    recordedUp = true
+                    NSLog("Debug_Pushup: 🟢 Recorded UP position (ready to start)")
+                } else if recordedUp && recordedDown {
+                    // Complete rep: up -> down -> up
+                    repCount += 1
+                    recordedDown = false  // Reset for next rep
+                    NSLog("Debug_Pushup: ✅ REP COUNTED! Total reps: %d", repCount)
+                }
+            } else if currentPhase == "down" {
+                if recordedUp && !recordedDown {
+                    // Valid down after up
+                    recordedDown = true
+                    NSLog("Debug_Pushup: 🔵 Recorded DOWN position")
+                }
+            } else if currentPhase == "kneeDown" {
+                // Invalid form - reset
+                if recordedUp || recordedDown {
+                    NSLog("Debug_Pushup: ❌ INVALID - Knees down, resetting flags")
+                }
+                recordedUp = false
+                recordedDown = false
+            } else if currentPhase == "mid" && legAngle < pushupLegStraightMin {
+                // Legs not straight enough - reset
+                if recordedUp || recordedDown {
+                    NSLog("Debug_Pushup: ❌ INVALID - Legs bent too much, resetting flags")
+                }
+                recordedUp = false
+                recordedDown = false
+            } else if currentPhase == "unknown" {
+                // Partial visibility - reset
+                if recordedUp || recordedDown {
+                    NSLog("Debug_Pushup: ⚠️ Lost visibility, resetting flags")
+                }
+                recordedUp = false
+                recordedDown = false
+            }
+        }
+
+        // Debug logging
+        let sideName = usingLeftSide ? "LEFT" : "RIGHT"
+        NSLog("Debug_Pushup: iOS Pushup Analysis (using %@ side)", sideName)
+        NSLog("Debug_Pushup: ⭐ ARM ANGLE=%.1f (up>%.0f=UP, <%.0f=DOWN) → %@", armAngle, pushupArmAngleUp, pushupArmAngleDown, isDownByArmAngle ? "DOWN✅" : (armAngle > pushupArmAngleUp ? "UP✅" : "MID"))
+        NSLog("Debug_Pushup: Shoulder Drop: Y=%.3f, @Up=%.3f, Wrist@Up=%.3f → %%=%.1f%% (need >=%.0f%%) → %@", shoulderY, shoulderYAtUp ?? 0, wristYAtUp ?? 0, shoulderDropPercent, pushupShoulderDropPercent, isDownByShoulderDrop ? "DOWN✅" : "NO")
+        NSLog("Debug_Pushup: Leg Angle=%.1f (kneeDown<%.0f, straight>%.0f)", legAngle, pushupLegKneeDownMax, pushupLegStraightMin)
+        NSLog("Debug_Pushup: 🎯 PHASE=%@ | RecordedUp=%@ | RecordedDown=%@ | Reps=%d", currentPhase, recordedUp ? "YES" : "NO", recordedDown ? "YES" : "NO", repCount)
+
+        // Track frames for validation (COMMENTED OUT - using state machine)
+        // trackFrameForValidation(frame: currentFrame, currentPhase: currentPhase)
+
+        // Count reps and validate (COMMENTED OUT - using state machine)
+        // let (newRepCount, validationResult) = updateRepCountWithValidation(currentPhase: currentPhase)
+
+        // Calculate confidence using all key landmarks
+        let keyLandmarks: [NormalizedLandmark]
+        if usingLeftSide {
+            keyLandmarks = [leftShoulder, leftElbow, leftWrist, leftHip, leftKnee, leftAnkle]
+        } else {
+            keyLandmarks = [rightShoulder, rightElbow, rightWrist, rightHip, rightKnee, rightAnkle]
+        }
         let confidence = calculateConfidence(landmarks: keyLandmarks)
 
-        // Detailed pose logging disabled for normal operation
-        // NSLog("Debug_Media: PoseDetector iOS: Pushup - armAngle=%.1f, phase=%@, reps=%d", armAngle, currentPhase, newRepCount)
+        // Determine validation message
+        var validationMessage: String? = nil
+        if kneesDown {
+            validationMessage = "Keep knees off the ground"
+        } else if legAngle < pushupLegStraightMin {
+            validationMessage = "Keep legs straight"
+        }
 
         return PoseState(
             exerciseType: exerciseType,
             currentPhase: currentPhase,
             confidence: confidence,
-            repCount: newRepCount,
-            isValidRep: validationResult?.isValid ?? true,
-            validationMessage: validationResult?.message
+            repCount: repCount,  // Use state machine rep count
+            isValidRep: currentPhase != "kneeDown" && legAngle >= pushupLegStraightMin,
+            validationMessage: validationMessage
         )
     }
 
@@ -250,14 +418,25 @@ class PoseDetector {
         NSLog("Debug_Squat: Leg Angle=%.1f (thresholds: up>%.0f, down<%.0f)", legAngle, squatAngleUp, squatAngleDown)
         NSLog("Debug_Squat: Phase Detected=%@, Last Phase=%@, Transitioning=%@", currentPhase, lastPhase, isTransitioning ? "YES" : "NO")
 
-        // Count reps on phase transitions (no validation for squat)
-        let (newRepCount, _) = updateRepCountWithValidation(currentPhase: currentPhase)
+        // Count reps on phase transitions (simple state tracking - no validation for squat yet)
+        if lastPhase == "down" && currentPhase == "up" && !isTransitioning {
+            repCount += 1
+            NSLog("Debug_Squat: ✅ REP COUNTED! Total reps: %d", repCount)
+            isTransitioning = true
+        } else if currentPhase == "down" {
+            isTransitioning = false
+        }
+
+        // Update lastPhase for tracking transitions
+        if currentPhase != "mid" {
+            lastPhase = currentPhase
+        }
 
         // Calculate confidence using selected side landmarks
         let keyLandmarks = usingLeftSide ? [leftHip, leftKnee, leftAnkle] : [rightHip, rightKnee, rightAnkle]
         let confidence = calculateConfidence(landmarks: keyLandmarks)
 
-        return PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: newRepCount)
+        return PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: repCount)
     }
 
     private func detectSitupPose(landmarks: [NormalizedLandmark]) -> PoseState {
@@ -288,17 +467,28 @@ class PoseDetector {
             currentPhase = "mid"
         }
 
-        // Count reps on phase transitions (no validation for situp)
-        let (newRepCount, _) = updateRepCountWithValidation(currentPhase: currentPhase)
+        // Count reps on phase transitions (simple state tracking - no validation for situp yet)
+        if lastPhase == "down" && currentPhase == "up" && !isTransitioning {
+            repCount += 1
+            NSLog("Debug_Situp: ✅ REP COUNTED! Total reps: %d", repCount)
+            isTransitioning = true
+        } else if currentPhase == "down" {
+            isTransitioning = false
+        }
+
+        // Update lastPhase for tracking transitions
+        if currentPhase != "mid" {
+            lastPhase = currentPhase
+        }
 
         // Calculate confidence
         let keyLandmarks = [leftEar, rightEar, leftShoulder, rightShoulder, leftHip, rightHip]
         let confidence = calculateConfidence(landmarks: keyLandmarks)
 
         // Detailed pose logging disabled for normal operation
-        // NSLog("Debug_Media: PoseDetector iOS: Situp - torsoAngle=%.1f, phase=%@, reps=%d", torsoAngle, currentPhase, newRepCount)
+        // NSLog("Debug_Media: PoseDetector iOS: Situp - torsoAngle=%.1f, phase=%@, reps=%d", torsoAngle, currentPhase, repCount)
 
-        return PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: newRepCount)
+        return PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: repCount)
     }
 
     // MARK: - Helper Methods
@@ -425,107 +615,132 @@ class PoseDetector {
 
     // MARK: - Pushup Validation Methods
 
-    private func trackFrameForValidation(frame: FrameData, currentPhase: String) {
-        guard exerciseType == "pushup" || exerciseType == "squat" else { return }
+    // COMMENTED OUT - Using state machine instead of frame buffer
+    // private func trackFrameForValidation(frame: FrameData, currentPhase: String) {
+    //     guard exerciseType == "pushup" || exerciseType == "squat" else { return }
+    //
+    //     // Only proceed if all required landmarks are visible
+    //     guard areRequiredLandmarksVisible() else {
+    //         // If we were recording and lose visibility, stop recording
+    //         if isRecordingRep {
+    //             if exerciseType == "squat" {
+    //                 NSLog("Debug_Squat: Lost required landmark visibility during rep - canceling recording")
+    //             } else {
+    //                 NSLog("Debug_Media: Lost required landmark visibility during rep - canceling recording")
+    //             }
+    //             isRecordingRep = false
+    //             frameBuffer.removeAll()
+    //         }
+    //         return
+    //     }
+    //
+    //     // Start recording when transitioning to "down" with full visibility
+    //     if !isRecordingRep && currentPhase == "down" && lastPhase == "up" {
+    //         if exerciseType == "squat" {
+    //             NSLog("Debug_Squat: Starting rep recording with full visibility (up → down)")
+    //         } else {
+    //             NSLog("Debug_Pushup: Starting rep recording with full visibility (up → down)")
+    //         }
+    //         isRecordingRep = true
+    //         repStartTime = frame.timestamp
+    //         frameBuffer.removeAll()
+    //         hadLegAngleViolation = false  // Reset leg angle violation flag for new rep
+    //     }
+    //
+    //     // Add frame to buffer if recording (only frames with full visibility)
+    //     if isRecordingRep {
+    //         frameBuffer.append(frame)
+    //     }
+    // }
 
-        // Only proceed if all required landmarks are visible
-        guard areRequiredLandmarksVisible() else {
-            // If we were recording and lose visibility, stop recording
-            if isRecordingRep {
-                if exerciseType == "squat" {
-                    NSLog("Debug_Squat: Lost required landmark visibility during rep - canceling recording")
-                } else {
-                    NSLog("Debug_Media: Lost required landmark visibility during rep - canceling recording")
-                }
-                isRecordingRep = false
-                frameBuffer.removeAll()
-            }
-            return
-        }
-
-        // Start recording when transitioning to "down" with full visibility
-        if !isRecordingRep && currentPhase == "down" && lastPhase == "up" {
-            if exerciseType == "squat" {
-                NSLog("Debug_Squat: Starting rep recording with full visibility (up → down)")
-            } else {
-                NSLog("Debug_Media: Starting rep recording with full visibility (up → down)")
-            }
-            isRecordingRep = true
-            repStartTime = frame.timestamp
-            frameBuffer.removeAll()
-        }
-
-        // Add frame to buffer if recording (only frames with full visibility)
-        if isRecordingRep {
-            frameBuffer.append(frame)
-        }
-    }
-
-    private func updateRepCountWithValidation(currentPhase: String) -> (Int, ValidationResult?) {
-        var validationResult: ValidationResult? = nil
-
-        if lastPhase == "down" && currentPhase == "up" && !isTransitioning {
-            // Check if all required landmarks are visible before counting rep
-            guard areRequiredLandmarksVisible() else {
-                if exerciseType == "squat" {
-                    NSLog("Debug_Squat: SKIPPING REP - required landmarks not visible")
-                } else {
-                    NSLog("Debug_Media: PoseDetector iOS: Skipping rep - required landmarks not visible")
-                }
-                isTransitioning = true
-                lastPhase = currentPhase
-                return (repCount, ValidationResult(isValid: false, message: "Required landmarks not visible"))
-            }
-            // End of rep - validate if we have frame data
-            if (exerciseType == "pushup" || exerciseType == "squat") && isRecordingRep && !frameBuffer.isEmpty {
-                switch exerciseType {
-                case "pushup":
-                    validationResult = validatePushupRep(frames: frameBuffer)
-                case "squat":
-                    validationResult = validateSquatRep(frames: frameBuffer)
-                default:
-                    validationResult = ValidationResult(isValid: true) // fallback
-                }
-
-                if validationResult!.isValid {
-                    repCount += 1
-                    if exerciseType == "squat" {
-                        NSLog("Debug_Squat: ✅ VALID REP COUNTED! Total reps: %d", repCount)
-                    } else {
-                        NSLog("Debug_Media: PoseDetector iOS: Valid %@ rep completed! Total reps: %d", exerciseType, repCount)
-                    }
-                } else {
-                    if exerciseType == "squat" {
-                        NSLog("Debug_Squat: ❌ INVALID REP: %@", validationResult!.message ?? "Unknown error")
-                    } else {
-                        NSLog("Debug_Media: PoseDetector iOS: Invalid %@ rep: %@", exerciseType, validationResult!.message ?? "Unknown error")
-                    }
-                }
-
-                // Reset recording
-                isRecordingRep = false
-                frameBuffer.removeAll()
-            } else {
-                // Non-validated exercise or no frame data
-                repCount += 1
-                if exerciseType == "squat" {
-                    NSLog("Debug_Squat: ✅ REP COUNTED (no validation)! Total reps: %d", repCount)
-                } else {
-                    NSLog("Debug_Media: PoseDetector iOS: Rep completed! Total reps: %d", repCount)
-                }
-            }
-
-            isTransitioning = true
-        } else if currentPhase == "down" {
-            isTransitioning = false
-        }
-
-        // Only update lastPhase for definitive phases (not "mid")
-        if currentPhase != "mid" {
-            lastPhase = currentPhase
-        }
-        return (repCount, validationResult)
-    }
+    // COMMENTED OUT - Using state machine instead
+    // private func updateRepCountWithValidation(currentPhase: String) -> (Int, ValidationResult?) {
+    //     var validationResult: ValidationResult? = nil
+    //
+    //     // If knees are down during pushup, invalidate the current rep
+    //     if exerciseType == "pushup" && currentPhase == "kneeDown" && isRecordingRep {
+    //         NSLog("Debug_Pushup: ❌ INVALID REP - Knees touching ground")
+    //         isRecordingRep = false
+    //         frameBuffer.removeAll()
+    //         isTransitioning = true
+    //         return (repCount, ValidationResult(isValid: false, message: "Keep knees off the ground"))
+    //     }
+    //
+    //     if lastPhase == "down" && currentPhase == "up" && !isTransitioning {
+    //         // Check if all required landmarks are visible before counting rep
+    //         guard areRequiredLandmarksVisible() else {
+    //             if exerciseType == "squat" {
+    //                 NSLog("Debug_Squat: SKIPPING REP - required landmarks not visible")
+    //             } else {
+    //                 NSLog("Debug_Pushup: SKIPPING REP - required landmarks not visible")
+    //             }
+    //             isTransitioning = true
+    //             lastPhase = currentPhase
+    //             return (repCount, ValidationResult(isValid: false, message: "Required landmarks not visible"))
+    //         }
+    //         // Check for leg angle violation during pushup rep
+    //         if exerciseType == "pushup" && hadLegAngleViolation {
+    //             NSLog("Debug_Pushup: ❌ INVALID REP - Legs bent too much (< 120°) during rep")
+    //             validationResult = ValidationResult(isValid: false, message: "Keep legs straight throughout the pushup")
+    //             isRecordingRep = false
+    //             frameBuffer.removeAll()
+    //             hadLegAngleViolation = false
+    //             isTransitioning = true
+    //             lastPhase = currentPhase
+    //             return (repCount, validationResult)
+    //         }
+    //
+    //         // End of rep - validate if we have frame data
+    //         if (exerciseType == "pushup" || exerciseType == "squat") && isRecordingRep && !frameBuffer.isEmpty {
+    //             switch exerciseType {
+    //             case "pushup":
+    //                 validationResult = validatePushupRep(frames: frameBuffer)
+    //             case "squat":
+    //                 validationResult = validateSquatRep(frames: frameBuffer)
+    //             default:
+    //                 validationResult = ValidationResult(isValid: true) // fallback
+    //             }
+    //
+    //             if validationResult!.isValid {
+    //                 repCount += 1
+    //                 if exerciseType == "squat" {
+    //                     NSLog("Debug_Squat: ✅ VALID REP COUNTED! Total reps: %d", repCount)
+    //                 } else {
+    //                     NSLog("Debug_Pushup: ✅ VALID REP COUNTED! Total reps: %d", repCount)
+    //                 }
+    //             } else {
+    //                 if exerciseType == "squat" {
+    //                     NSLog("Debug_Squat: ❌ INVALID REP: %@", validationResult!.message ?? "Unknown error")
+    //                 } else {
+    //                     NSLog("Debug_Pushup: ❌ INVALID REP: %@", validationResult!.message ?? "Unknown error")
+    //                 }
+    //             }
+    //
+    //             // Reset recording
+    //             isRecordingRep = false
+    //             frameBuffer.removeAll()
+    //             hadLegAngleViolation = false
+    //         } else {
+    //             // Non-validated exercise or no frame data
+    //             repCount += 1
+    //             if exerciseType == "squat" {
+    //                 NSLog("Debug_Squat: ✅ REP COUNTED (no validation)! Total reps: %d", repCount)
+    //             } else {
+    //                 NSLog("Debug_Media: PoseDetector iOS: Rep completed! Total reps: %d", repCount)
+    //             }
+    //         }
+    //
+    //         isTransitioning = true
+    //     } else if currentPhase == "down" {
+    //         isTransitioning = false
+    //     }
+    //
+    //     // Only update lastPhase for definitive phases (not "mid" or "kneeDown")
+    //     if currentPhase != "mid" && currentPhase != "kneeDown" {
+    //         lastPhase = currentPhase
+    //     }
+    //     return (repCount, validationResult)
+    // }
 
     private func validatePushupRep(frames: [FrameData]) -> ValidationResult {
         guard !frames.isEmpty else {

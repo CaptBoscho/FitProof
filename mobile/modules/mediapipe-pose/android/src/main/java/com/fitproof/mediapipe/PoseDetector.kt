@@ -63,8 +63,13 @@ class PoseDetector(private val exerciseType: String) {
 
         // Thresholds for pose detection
         private const val MIN_CONFIDENCE = 0.7f
-        private const val PUSHUP_ANGLE_THRESHOLD_DOWN = 90f  // Degrees
-        private const val PUSHUP_ANGLE_THRESHOLD_UP = 160f   // Degrees
+
+        // Pushup phase detection thresholds (angle-based)
+        private const val PUSHUP_ARM_ANGLE_UP = 160f         // Arms straight (up position)
+        private const val PUSHUP_ARM_ANGLE_DOWN = 105f       // Arms bent (down position) - PRIMARY METHOD
+        private const val PUSHUP_LEG_STRAIGHT_MIN = 120f     // Minimum leg straightness for proper form (invalidates if less)
+        private const val PUSHUP_LEG_KNEE_DOWN_MAX = 100f    // Maximum leg angle when knees are down
+        private const val PUSHUP_SHOULDER_DROP_PERCENT = 40f // Minimum shoulder drop % for down position (backup method)
 
         // Pushup validation thresholds (from TypeScript model)
         private const val LEG_ANGLE_MIN_THRESHOLD = 120f    // Minimum leg straightness
@@ -86,10 +91,19 @@ class PoseDetector(private val exerciseType: String) {
     private var isTransitioning = false
     private var currentLandmarks: List<NormalizedLandmark>? = null
 
-    // Frame tracking for pushup validation
-    private val frameBuffer = mutableListOf<FrameData>()
-    private var isRecordingRep = false
-    private var repStartTime = 0L
+    // Frame tracking for pushup validation (COMMENTED OUT - using state machine instead)
+    // private val frameBuffer = mutableListOf<FrameData>()
+    // private var isRecordingRep = false
+    // private var repStartTime = 0L
+    // private var hadLegAngleViolation = false  // Track if legs bent too much during rep
+
+    // State machine for rep counting (simpler approach)
+    private var recordedUp = false      // Have we seen a valid up position?
+    private var recordedDown = false    // Have we seen a valid down position after up?
+
+    // Shoulder drop tracking for pushup down position (alternative method)
+    private var shoulderYAtUp: Float? = null         // Shoulder Y position when arms are straight (up)
+    private var wristYAtUp: Float? = null            // Wrist Y position when arms are straight (up)
 
     fun detectPose(landmarks: List<NormalizedLandmark>): PoseState {
         if (landmarks.size < 33) {
@@ -108,6 +122,19 @@ class PoseDetector(private val exerciseType: String) {
     }
 
     private fun detectPushupPose(landmarks: List<NormalizedLandmark>): PoseState {
+        // Check if all required landmarks are visible FIRST
+        if (!areRequiredLandmarksVisible()) {
+            println("Debug_Pushup: Required landmarks not visible - cannot detect pose")
+            return PoseState(
+                exerciseType = exerciseType,
+                currentPhase = "unknown",
+                confidence = 0f,
+                repCount = repCount,
+                isValidRep = false,
+                validationMessage = "Required landmarks not visible"
+            )
+        }
+
         // Convert landmarks to our format for tracking
         val currentFrame = FrameData(
             landmarks = landmarks.map { LandmarkData(it.x(), it.y(), it.visibility().orElse(0f)) },
@@ -121,47 +148,190 @@ class PoseDetector(private val exerciseType: String) {
         val rightElbow = landmarks[LandmarkIndices.RIGHT_ELBOW]
         val leftWrist = landmarks[LandmarkIndices.LEFT_WRIST]
         val rightWrist = landmarks[LandmarkIndices.RIGHT_WRIST]
+        val leftHip = landmarks[LandmarkIndices.LEFT_HIP]
+        val rightHip = landmarks[LandmarkIndices.RIGHT_HIP]
+        val leftKnee = landmarks[LandmarkIndices.LEFT_KNEE]
+        val rightKnee = landmarks[LandmarkIndices.RIGHT_KNEE]
+        val leftAnkle = landmarks[LandmarkIndices.LEFT_ANKLE]
+        val rightAnkle = landmarks[LandmarkIndices.RIGHT_ANKLE]
 
-        // Choose the better arm for analysis (supports side view)
-        val betterArmIndices = chooseBetterPushupSide()
-        val usingLeftArm = betterArmIndices.contains(11) // contains left shoulder
+        // Choose the better side for analysis (supports side view)
+        val betterSideIndices = chooseBetterPushupSide()
+        val usingLeftSide = betterSideIndices.contains(11) // contains left shoulder
 
-        val armAngle = if (usingLeftArm) {
+        // Calculate arm angle (shoulder-elbow-wrist)
+        val armAngle = if (usingLeftSide) {
             calculateAngle(leftShoulder, leftElbow, leftWrist)
         } else {
             calculateAngle(rightShoulder, rightElbow, rightWrist)
         }
 
-        // Determine current phase based on arm angle
-        val currentPhase = when {
-            armAngle < PUSHUP_ANGLE_THRESHOLD_DOWN -> "down"
-            armAngle > PUSHUP_ANGLE_THRESHOLD_UP -> "up"
-            else -> "mid"
+        // Calculate leg angle (hip-knee-ankle) to ensure legs stay straight
+        val legAngle = if (usingLeftSide) {
+            calculateAngle(leftHip, leftKnee, leftAnkle)
+        } else {
+            calculateAngle(rightHip, rightKnee, rightAnkle)
         }
 
-        // Track frames for validation
-        trackFrameForValidation(currentFrame, currentPhase)
+        // Check if knees are touching the ground using LEG ANGLE (primary method)
+        // When knees are down: leg angle is very small (~80-100°)
+        // When knees are up: leg angle is larger (~140-180°)
+        val kneesDownByAngle = legAngle < PUSHUP_LEG_KNEE_DOWN_MAX
 
-        // Count reps and validate
-        val (newRepCount, validationResult) = updateRepCountWithValidation(currentPhase)
+        // ALTERNATIVE: Ground line Y-coordinate check (currently disabled, but kept for future use)
+        // In camera coordinates: Y=0 is TOP, Y=1 is BOTTOM
+        // When knees are UP (proper form): knee Y > ground line (knee further from camera)
+        // When knees are DOWN: knee Y < ground line (knee closer to camera/ground)
+        val kneeY = if (usingLeftSide) leftKnee.y() else rightKnee.y()
+        val wristY = if (usingLeftSide) leftWrist.y() else rightWrist.y()
+        val ankleY = if (usingLeftSide) leftAnkle.y() else rightAnkle.y()
+        val groundLineY = maxOf(wristY, ankleY)
+        val kneesDownByYCoord = kneeY < groundLineY  // INVERTED: smaller Y = closer to ground
 
-        // Calculate confidence using selected arm landmarks
-        val keyLandmarks = if (usingLeftArm) {
-            listOf(leftShoulder, leftElbow, leftWrist)
+        // Use leg angle as primary detection method
+        val kneesDown = kneesDownByAngle
+
+        // Track shoulder Y position when in up position (for alternative down detection)
+        val shoulderY = if (usingLeftSide) leftShoulder.y() else rightShoulder.y()
+
+        // Capture shoulder and wrist Y when arms are straight (up position)
+        if (armAngle > PUSHUP_ARM_ANGLE_UP && legAngle >= PUSHUP_LEG_STRAIGHT_MIN) {
+            shoulderYAtUp = shoulderY
+            wristYAtUp = wristY
+        }
+
+        // Calculate shoulder drop percentage (alternative method for detecting down)
+        // NOTE: In camera coordinates during pushup, shoulder Y DECREASES (moves closer to camera)
+        var shoulderDropPercent = 0f
+        var isDownByShoulderDrop = false
+        val upShoulderY = shoulderYAtUp
+        val upWristY = wristYAtUp
+        if (upShoulderY != null && upWristY != null) {
+            // Total possible drop distance (from shoulder at up to wrist at up)
+            // Since wrist is typically higher on screen (smaller Y), this will be negative
+            val totalDropDistance = Math.abs(upWristY - upShoulderY)
+
+            if (totalDropDistance > 0) {
+                // Current drop (how much shoulder has moved toward wrist from up position)
+                // When doing pushup, shoulder Y decreases (moves up on screen/closer to camera)
+                val currentDrop = Math.abs(shoulderY - upShoulderY)
+
+                // Calculate percentage (0% = at up position, 100% = at wrist level)
+                shoulderDropPercent = (currentDrop / totalDropDistance) * 100f
+
+                // Check if shoulder has dropped enough
+                isDownByShoulderDrop = shoulderDropPercent >= PUSHUP_SHOULDER_DROP_PERCENT
+            }
+        }
+
+        // Track leg angle violations during rep recording (COMMENTED OUT - using state machine)
+        // if (isRecordingRep && exerciseType == "pushup") {
+        //     if (legAngle < PUSHUP_LEG_STRAIGHT_MIN && !kneesDown) {
+        //         println("Debug_Pushup: ⚠️ Leg angle violation during rep: $legAngle < $PUSHUP_LEG_STRAIGHT_MIN")
+        //         hadLegAngleViolation = true
+        //     }
+        // }
+
+        // Determine current phase based on arm angle and form
+        // PRIMARY: Use arm angle ONLY (shoulder drop kept for reference but not used)
+        val isDownByArmAngle = armAngle < PUSHUP_ARM_ANGLE_DOWN
+        val isDown = isDownByArmAngle  // Only use arm angle for down detection
+
+        val currentPhase = when {
+            kneesDown -> "kneeDown"
+            legAngle < PUSHUP_LEG_STRAIGHT_MIN -> "mid" // Legs not straight enough
+            isDown -> "down" // Arms bent (low position) - detected by ARM ANGLE
+            armAngle > PUSHUP_ARM_ANGLE_UP -> "up" // Arms straight (high position)
+            else -> "mid" // Transition
+        }
+
+        // State machine for pushup rep counting
+        if (exerciseType == "pushup") {
+            when (currentPhase) {
+                "up" -> {
+                    if (!recordedUp) {
+                        // First time seeing up position
+                        recordedUp = true
+                        println("Debug_Pushup: 🟢 Recorded UP position (ready to start)")
+                    } else if (recordedUp && recordedDown) {
+                        // Complete rep: up -> down -> up
+                        repCount++
+                        recordedDown = false  // Reset for next rep
+                        println("Debug_Pushup: ✅ REP COUNTED! Total reps: $repCount")
+                    }
+                }
+                "down" -> {
+                    if (recordedUp && !recordedDown) {
+                        // Valid down after up
+                        recordedDown = true
+                        println("Debug_Pushup: 🔵 Recorded DOWN position")
+                    }
+                }
+                "kneeDown" -> {
+                    // Invalid form - reset
+                    if (recordedUp || recordedDown) {
+                        println("Debug_Pushup: ❌ INVALID - Knees down, resetting flags")
+                    }
+                    recordedUp = false
+                    recordedDown = false
+                }
+                "mid" -> {
+                    if (legAngle < PUSHUP_LEG_STRAIGHT_MIN) {
+                        // Legs not straight enough - reset
+                        if (recordedUp || recordedDown) {
+                            println("Debug_Pushup: ❌ INVALID - Legs bent too much, resetting flags")
+                        }
+                        recordedUp = false
+                        recordedDown = false
+                    }
+                }
+                "unknown" -> {
+                    // Partial visibility - reset
+                    if (recordedUp || recordedDown) {
+                        println("Debug_Pushup: ⚠️ Lost visibility, resetting flags")
+                    }
+                    recordedUp = false
+                    recordedDown = false
+                }
+            }
+        }
+
+        // Debug logging
+        val sideName = if (usingLeftSide) "LEFT" else "RIGHT"
+        println("Debug_Pushup: Android Pushup Analysis (using $sideName side)")
+        println("Debug_Pushup: ⭐ ARM ANGLE=$armAngle (up>$PUSHUP_ARM_ANGLE_UP=UP, <$PUSHUP_ARM_ANGLE_DOWN=DOWN) → ${if (isDownByArmAngle) "DOWN✅" else if (armAngle > PUSHUP_ARM_ANGLE_UP) "UP✅" else "MID"}")
+        println("Debug_Pushup: Shoulder Drop: Y=$shoulderY, @Up=${upShoulderY ?: 0f}, Wrist@Up=${upWristY ?: 0f} → %=$shoulderDropPercent% (need >=$PUSHUP_SHOULDER_DROP_PERCENT%) → ${if (isDownByShoulderDrop) "DOWN✅" else "NO"}")
+        println("Debug_Pushup: Leg Angle=$legAngle (kneeDown<$PUSHUP_LEG_KNEE_DOWN_MAX, straight>$PUSHUP_LEG_STRAIGHT_MIN)")
+        println("Debug_Pushup: 🎯 PHASE=$currentPhase | RecordedUp=${if (recordedUp) "YES" else "NO"} | RecordedDown=${if (recordedDown) "YES" else "NO"} | Reps=$repCount")
+
+        // Track frames for validation (COMMENTED OUT - using state machine)
+        // trackFrameForValidation(currentFrame, currentPhase)
+
+        // Count reps and validate (COMMENTED OUT - using state machine)
+        // val (newRepCount, validationResult) = updateRepCountWithValidation(currentPhase)
+
+        // Calculate confidence using all key landmarks
+        val keyLandmarks = if (usingLeftSide) {
+            listOf(leftShoulder, leftElbow, leftWrist, leftHip, leftKnee, leftAnkle)
         } else {
-            listOf(rightShoulder, rightElbow, rightWrist)
+            listOf(rightShoulder, rightElbow, rightWrist, rightHip, rightKnee, rightAnkle)
         }
         val confidence = calculateConfidence(keyLandmarks)
 
-        println("PoseDetector: Pushup - armAngle=$armAngle, phase=$currentPhase, reps=$newRepCount")
+        // Determine validation message
+        val validationMessage = when {
+            kneesDown -> "Keep knees off the ground"
+            legAngle < PUSHUP_LEG_STRAIGHT_MIN -> "Keep legs straight"
+            else -> null
+        }
 
         return PoseState(
             exerciseType = exerciseType,
             currentPhase = currentPhase,
             confidence = confidence,
-            repCount = newRepCount,
-            isValidRep = validationResult?.isValid ?: true,
-            validationMessage = validationResult?.message
+            repCount = repCount,  // Use state machine rep count
+            isValidRep = currentPhase != "kneeDown" && legAngle >= PUSHUP_LEG_STRAIGHT_MIN,
+            validationMessage = validationMessage
         )
     }
 
@@ -445,11 +615,12 @@ class PoseDetector(private val exerciseType: String) {
             if (exerciseType == "squat") {
                 println("Debug_Squat: Starting rep recording with full visibility (up → down)")
             } else {
-                println("Debug_Media: Starting rep recording with full visibility (up → down)")
+                println("Debug_Pushup: Starting rep recording with full visibility (up → down)")
             }
             isRecordingRep = true
             repStartTime = frame.timestamp
             frameBuffer.clear()
+            hadLegAngleViolation = false  // Reset leg angle violation flag for new rep
         }
 
         // Add frame to buffer if recording (only frames with full visibility)
@@ -462,6 +633,15 @@ class PoseDetector(private val exerciseType: String) {
         // Basic rep counting
         var validationResult: ValidationResult? = null
 
+        // If knees are down during pushup, invalidate the current rep
+        if (exerciseType == "pushup" && currentPhase == "kneeDown" && isRecordingRep) {
+            println("Debug_Pushup: ❌ INVALID REP - Knees touching ground")
+            isRecordingRep = false
+            frameBuffer.clear()
+            isTransitioning = true
+            return Pair(repCount, ValidationResult(false, "Keep knees off the ground"))
+        }
+
         if (lastPhase == "down" && currentPhase == "up" && !isTransitioning) {
             // Check if all required landmarks are visible before counting rep
             if (!areRequiredLandmarksVisible()) {
@@ -470,6 +650,18 @@ class PoseDetector(private val exerciseType: String) {
                 lastPhase = currentPhase
                 return Pair(repCount, ValidationResult(false, "Required landmarks not visible"))
             }
+            // Check for leg angle violation during pushup rep
+            if (exerciseType == "pushup" && hadLegAngleViolation) {
+                println("Debug_Pushup: ❌ INVALID REP - Legs bent too much (< 120°) during rep")
+                validationResult = ValidationResult(false, "Keep legs straight throughout the pushup")
+                isRecordingRep = false
+                frameBuffer.clear()
+                hadLegAngleViolation = false
+                isTransitioning = true
+                lastPhase = currentPhase
+                return Pair(repCount, validationResult)
+            }
+
             // End of rep - validate if we have frame data
             if ((exerciseType == "pushup" || exerciseType == "squat") && isRecordingRep && frameBuffer.isNotEmpty()) {
                 validationResult = when (exerciseType) {
@@ -480,14 +672,15 @@ class PoseDetector(private val exerciseType: String) {
 
                 if (validationResult.isValid) {
                     repCount++
-                    println("PoseDetector: Valid $exerciseType rep completed! Total reps: $repCount")
+                    println("Debug_Pushup: ✅ VALID REP COUNTED! Total reps: $repCount")
                 } else {
-                    println("PoseDetector: Invalid $exerciseType rep: ${validationResult.message}")
+                    println("Debug_Pushup: ❌ INVALID REP: ${validationResult.message}")
                 }
 
                 // Reset recording
                 isRecordingRep = false
                 frameBuffer.clear()
+                hadLegAngleViolation = false
             } else {
                 // Non-validated exercise or no frame data
                 repCount++
@@ -499,8 +692,8 @@ class PoseDetector(private val exerciseType: String) {
             isTransitioning = false
         }
 
-        // Only update lastPhase for definitive phases (not "mid")
-        if (currentPhase != "mid") {
+        // Only update lastPhase for definitive phases (not "mid" or "kneeDown")
+        if (currentPhase != "mid" && currentPhase != "kneeDown") {
             lastPhase = currentPhase
         }
         return Pair(repCount, validationResult)

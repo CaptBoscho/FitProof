@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Button,
 } from 'react-native';
 import { BaseScreenProps } from '../types';
 import { CONFIG } from '../constants/config';
@@ -123,9 +124,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
   const toggleAuthMode = () => {
     setIsLogin(!isLogin);
     setEmail('');
-    setUsername('');
-    setPassword('');
-    setConfirmPassword('');
+    setUsername('corbin.byers@gmail.com');
+    setPassword('B@cker36');
+    setConfirmPassword('B@cker36');
     setValidationErrors({});
   };
 
@@ -154,6 +155,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
             </View>
           )}
 
+          <Button title="Corbin login" onPress={toggleAuthMode} />
           {/* Email Input */}
           <View style={styles.inputContainer}>
             <TextInput
