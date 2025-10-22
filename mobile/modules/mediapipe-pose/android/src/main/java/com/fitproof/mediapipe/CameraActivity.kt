@@ -1,13 +1,21 @@
 package com.fitproof.mediapipe
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.media.MediaPlayer
+import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.provider.Settings
 import android.view.Gravity
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.setPadding
 import androidx.camera.core.*
@@ -31,6 +39,9 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var backButton: ImageButton
     private lateinit var repCountText: TextView
     private lateinit var poseStatusText: TextView
+    private lateinit var confidenceText: TextView
+    private lateinit var feedbackMessageText: TextView
+    private lateinit var formFeedbackView: FrameLayout
     private lateinit var countdownText: TextView
     private var camera: Camera? = null
     private var cameraProvider: ProcessCameraProvider? = null
@@ -44,6 +55,13 @@ class CameraActivity : AppCompatActivity() {
     private var repCount = 0
     private lateinit var poseDetector: PoseDetector
 
+    // Session tracking
+    private var sessionStartTime: Long = 0
+    private var validReps = 0
+    private var invalidReps = 0
+    private val formErrors = mutableListOf<String>()
+    private var lastRepWasValid = true
+
     // Countdown state
     private var countdownValue = 5
     private var isCountdownActive = true
@@ -55,8 +73,7 @@ class CameraActivity : AppCompatActivity() {
         if (isGranted) {
             startCamera()
         } else {
-            Toast.makeText(this, "Camera permission is required", Toast.LENGTH_SHORT).show()
-            finish()
+            showPermissionDeniedDialog()
         }
     }
 
@@ -102,6 +119,7 @@ class CameraActivity : AppCompatActivity() {
             setColorFilter(Color.WHITE)
             setPadding(24)
             setOnClickListener {
+                printSessionSummary()
                 finish()
             }
         }
@@ -122,6 +140,35 @@ class CameraActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
             setPadding(24)
             setBackgroundColor(Color.parseColor("#80000000")) // Semi-transparent black
+        }
+
+        // Create confidence text
+        confidenceText = TextView(this).apply {
+            text = "Confidence: --"
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            setPadding(20)
+            setBackgroundColor(Color.parseColor("#80000000")) // Semi-transparent black
+        }
+
+        // Create feedback message text (bottom center)
+        feedbackMessageText = TextView(this).apply {
+            text = ""
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            setPadding(32)
+            setBackgroundColor(Color.parseColor("#E6FF9800")) // Orange with high opacity
+            gravity = Gravity.CENTER
+            maxLines = 2
+            visibility = android.view.View.GONE
+        }
+
+        // Create form feedback overlay (colored border)
+        formFeedbackView = FrameLayout(this).apply {
+            background = null
+            setBackgroundResource(android.R.drawable.dialog_frame) // Will be changed dynamically
+            isClickable = false
+            isFocusable = false
         }
 
         // Create countdown text
@@ -160,6 +207,32 @@ class CameraActivity : AppCompatActivity() {
             setMargins(0, 80, 32, 0) // Below rep counter
         }
 
+        // Layout parameters for confidence text (below pose status)
+        val confidenceParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.END
+            setMargins(0, 130, 32, 0) // Below pose status
+        }
+
+        // Layout parameters for feedback message (bottom center)
+        val feedbackMessageParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            setMargins(64, 0, 64, 150) // Bottom with margins
+        }
+
+        // Layout parameters for form feedback overlay (fullscreen with padding)
+        val formFeedbackParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ).apply {
+            setMargins(48, 120, 48, 48)
+        }
+
         // Layout parameters for countdown (center)
         val countdownParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -171,9 +244,12 @@ class CameraActivity : AppCompatActivity() {
         // Add views to frame layout
         frameLayout.addView(previewView)
         frameLayout.addView(overlayView)
+        frameLayout.addView(formFeedbackView, formFeedbackParams)
         frameLayout.addView(backButton, backButtonParams)
         frameLayout.addView(repCountText, repCountParams)
         frameLayout.addView(poseStatusText, poseStatusParams)
+        frameLayout.addView(confidenceText, confidenceParams)
+        frameLayout.addView(feedbackMessageText, feedbackMessageParams)
         frameLayout.addView(countdownText, countdownParams)
 
         setContentView(frameLayout)
@@ -214,16 +290,18 @@ class CameraActivity : AppCompatActivity() {
                     }
                     .setErrorListener { error: RuntimeException ->
                         runOnUiThread {
-                            Toast.makeText(this, "Pose detection error: ${error.message}", Toast.LENGTH_SHORT).show()
+                            showErrorDialog("Pose Detection Error", "Error during pose detection: ${error.message}")
                         }
                     }
                     .build()
 
                 poseLandmarker = PoseLandmarker.createFromOptions(this, options)
+                android.util.Log.d("Debug_Media", "✅ MediaPipe model loaded successfully")
             } catch (e: Exception) {
                 runOnUiThread {
-                    Toast.makeText(this, "Failed to load MediaPipe model: ${e.message}", Toast.LENGTH_LONG).show()
+                    showErrorDialog("Model Loading Error", "Failed to load MediaPipe model: ${e.message}")
                 }
+                android.util.Log.e("Debug_Media", "❌ Failed to load model: ${e.message}", e)
             }
         }
     }
@@ -234,8 +312,10 @@ class CameraActivity : AppCompatActivity() {
             try {
                 cameraProvider = cameraProviderFuture.get()
                 bindCameraUseCases()
+                android.util.Log.d("Debug_Media", "✅ Camera started successfully")
             } catch (e: Exception) {
-                Toast.makeText(this, "Failed to start camera: ${e.message}", Toast.LENGTH_SHORT).show()
+                android.util.Log.e("Debug_Media", "❌ Failed to start camera: ${e.message}", e)
+                showErrorDialog("Camera Error", "Failed to start camera: ${e.message}\n\nPlease ensure your device has a working front camera.")
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -324,6 +404,9 @@ class CameraActivity : AppCompatActivity() {
                     } else {
                         countdownText.visibility = android.view.View.GONE
                         isCountdownActive = false
+                        // Start session tracking
+                        sessionStartTime = System.currentTimeMillis()
+                        android.util.Log.d("Debug_Session", "Session started at $sessionStartTime")
                         println("Debug_Media: Countdown finished, pose detection enabled")
                     }
                 }
@@ -356,6 +439,34 @@ class CameraActivity : AppCompatActivity() {
                 // Update rep count if it changed
                 if (poseState.repCount != repCount) {
                     updateRepCount(poseState.repCount)
+                    // Track rep validity for session stats
+                    if (poseState.isValidRep) {
+                        validReps++
+                        android.util.Log.d("Debug_Session", "✅ Valid rep #$validReps")
+                    } else {
+                        invalidReps++
+                        poseState.validationMessage?.let { msg ->
+                            if (msg.isNotEmpty()) {
+                                formErrors.add(msg)
+                            }
+                        }
+                        android.util.Log.d("Debug_Session", "❌ Invalid rep #$invalidReps - ${poseState.validationMessage ?: "unknown error"}")
+                    }
+                    lastRepWasValid = poseState.isValidRep
+                    // Play success sound on rep completion
+                    playSuccessSound()
+                }
+
+                // Update form feedback with confidence and validation status
+                updateFormFeedback(isValid = poseState.isValidRep, confidence = poseState.confidence)
+
+                // Show feedback message if there's a validation issue
+                if (!poseState.isValidRep) {
+                    getFeedbackMessage(poseState.validationMessage, poseState.currentPhase)?.let { feedbackMsg ->
+                        showFeedbackMessage(feedbackMsg)
+                        // Play error sound for form issues
+                        playErrorSound()
+                    }
                 }
 
                 // Log pose analysis results
@@ -386,10 +497,174 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun updateRepCount(newCount: Int) {
+        val oldCount = repCount
         repCount = newCount
+
         runOnUiThread {
             repCountText.text = "Reps: $repCount"
+
+            // Trigger haptic feedback when rep count increases
+            if (newCount > oldCount) {
+                val vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    vibrator.vibrate(VibrationEffect.createOneShot(100, VibrationEffect.DEFAULT_AMPLITUDE))
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator.vibrate(100)
+                }
+                android.util.Log.d("Debug_Media", "🎉 Haptic feedback triggered for rep #$newCount")
+            }
         }
+    }
+
+    private fun updateFormFeedback(isValid: Boolean, confidence: Float) {
+        runOnUiThread {
+            // Update confidence label
+            val confidencePercent = (confidence * 100).toInt()
+            confidenceText.text = "Confidence: $confidencePercent%"
+
+            // Update form feedback overlay color
+            // Only show feedback after countdown
+            if (isCountdownActive) {
+                formFeedbackView.setBackgroundColor(Color.TRANSPARENT)
+                return@runOnUiThread
+            }
+
+            // Create colored border effect using drawable
+            val borderDrawable = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = 32f
+                setStroke(16, when {
+                    confidence < 0.5f -> Color.parseColor("#80FFFF00") // Yellow - low confidence
+                    isValid -> Color.parseColor("#9900FF00") // Green - good form
+                    else -> Color.parseColor("#99FF0000") // Red - invalid form
+                })
+            }
+            formFeedbackView.background = borderDrawable
+        }
+    }
+
+    private fun showFeedbackMessage(message: String, durationMs: Long = 3000) {
+        runOnUiThread {
+            if (!isCountdownActive) {
+                feedbackMessageText.text = message
+                feedbackMessageText.visibility = android.view.View.VISIBLE
+
+                // Auto-hide after duration
+                Handler(Looper.getMainLooper()).postDelayed({
+                    feedbackMessageText.visibility = android.view.View.GONE
+                }, durationMs)
+            }
+        }
+    }
+
+    private fun getFeedbackMessage(validationMessage: String?, phase: String): String? {
+        // Return null if no validation message or if in valid state
+        if (validationMessage.isNullOrEmpty()) return null
+
+        // Map validation messages to user-friendly instructions
+        return when (phase) {
+            "kneeDown" -> "⚠️ Keep knees off the ground"
+            "unknown" -> "⚠️ Position your full body in view"
+            "mid" -> {
+                if (validationMessage.contains("leg", ignoreCase = true) ||
+                    validationMessage.contains("knee", ignoreCase = true)) {
+                    "💪 Keep your legs straight"
+                } else null // Mid is normal transition
+            }
+            else -> {
+                // Generic feedback for other validation messages
+                when {
+                    validationMessage.contains("arm", ignoreCase = true) ->
+                        "💪 Full range of motion with arms"
+                    validationMessage.contains("leg", ignoreCase = true) ->
+                        "🦵 Keep legs straight"
+                    validationMessage.contains("depth", ignoreCase = true) ->
+                        "⬇️ Go lower for full squat"
+                    else -> null
+                }
+            }
+        }
+    }
+
+    private fun playSuccessSound() {
+        try {
+            // Play notification sound for success
+            val notification = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val r = RingtoneManager.getRingtone(applicationContext, notification)
+            r.play()
+        } catch (e: Exception) {
+            android.util.Log.e("Debug_Media", "Error playing success sound: ${e.message}")
+        }
+    }
+
+    private fun playErrorSound() {
+        try {
+            // Play a short error beep
+            val mediaPlayer = MediaPlayer.create(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
+            mediaPlayer?.start()
+            mediaPlayer?.setOnCompletionListener { it.release() }
+        } catch (e: Exception) {
+            android.util.Log.e("Debug_Media", "Error playing error sound: ${e.message}")
+        }
+    }
+
+    private fun showPermissionDeniedDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Camera Permission Required")
+            .setMessage("FitProof needs camera access to track your exercises. Please enable camera access in Settings.")
+            .setPositiveButton("Open Settings") { _, _ ->
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", packageName, null)
+                }
+                startActivity(intent)
+                finish()
+            }
+            .setNegativeButton("Cancel") { _, _ ->
+                finish()
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun showErrorDialog(title: String, message: String) {
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton("OK") { _, _ ->
+                finish()
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun printSessionSummary() {
+        if (sessionStartTime == 0L) {
+            android.util.Log.d("Debug_Session", "No session data to summarize")
+            return
+        }
+
+        val duration = (System.currentTimeMillis() - sessionStartTime) / 1000 // seconds
+        val minutes = duration / 60
+        val seconds = duration % 60
+
+        android.util.Log.d("Debug_Session", "==================== SESSION SUMMARY ====================")
+        android.util.Log.d("Debug_Session", "Exercise: ${exerciseType.replaceFirstChar { it.uppercase() }}")
+        android.util.Log.d("Debug_Session", "Duration: ${minutes}m ${seconds}s")
+        android.util.Log.d("Debug_Session", "Total Reps: $repCount")
+        val validPercentage = if (repCount > 0) validReps.toFloat() / repCount * 100 else 0f
+        android.util.Log.d("Debug_Session", "Valid Reps: $validReps (%.1f%%)".format(validPercentage))
+        val invalidPercentage = if (repCount > 0) invalidReps.toFloat() / repCount * 100 else 0f
+        android.util.Log.d("Debug_Session", "Invalid Reps: $invalidReps (%.1f%%)".format(invalidPercentage))
+
+        if (formErrors.isNotEmpty()) {
+            val errorCounts = formErrors.groupingBy { it }.eachCount().toList().sortedByDescending { it.second }
+            android.util.Log.d("Debug_Session", "Common Errors:")
+            errorCounts.forEach { (error, count) ->
+                android.util.Log.d("Debug_Session", "  - $error ($count times)")
+            }
+        }
+        android.util.Log.d("Debug_Session", "=======================================================")
     }
 
     // toBitmap() extension is now built into ImageProxy, so we don't need our own implementation

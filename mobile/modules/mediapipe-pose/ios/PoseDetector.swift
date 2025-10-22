@@ -54,6 +54,44 @@ struct ValidationResult {
     }
 }
 
+// MARK: - ML Training Data Structures
+
+struct MLLandmarkData {
+    let name: String
+    let x: Float
+    let y: Float
+    let z: Float
+    let visibility: Float
+}
+
+struct MLFrameData {
+    let timestamp: TimeInterval
+    let exerciseType: String
+    let frameNumber: Int
+
+    // Raw landmarks
+    let landmarks: [MLLandmarkData]
+
+    // Computed angles
+    let armAngle: Float?
+    let legAngle: Float?
+    let torsoAngle: Float?
+
+    // Exercise-specific metrics
+    let shoulderDropPercentage: Float?
+    let kneeDropDistance: Float?
+    let footStability: Float?
+
+    // Detection state
+    let currentPhase: String
+    let isValidForm: Bool
+    let confidence: Float
+
+    // Ground truth labels
+    let labeledPhase: String      // "up", "down", "mid", etc.
+    let labeledFormQuality: String // "good", "knees_down", "arms_not_straight", etc.
+}
+
 class PoseDetector {
 
     // MARK: - Landmark Indices (based on trackedLandmarks.ts)
@@ -102,6 +140,10 @@ class PoseDetector {
     private let squatAngleUp: Float = 160.0      // Standing position (leg nearly straight)
     private let squatAngleDown: Float = 110.0    // Squat bottom position (leg bent)
 
+    // Situp phase detection thresholds (angle-based)
+    private let situpTorsoAngleUp: Float = 100.0    // Sitting up (torso bent forward)
+    private let situpTorsoAngleDown: Float = 150.0  // Lying down (torso nearly flat)
+
     // MARK: - Properties
     private let exerciseType: String
     private var lastPhase: String = "up"
@@ -122,6 +164,10 @@ class PoseDetector {
     // Shoulder drop tracking for pushup down position (alternative method)
     private var shoulderYAtUp: Float? = nil         // Shoulder Y position when arms are straight (up)
     private var wristYAtUp: Float? = nil            // Wrist Y position when arms are straight (up)
+
+    // ML Training Data Capture (every 10th frame)
+    private var frameCounter: Int = 0
+    private var mlFrameData: [MLFrameData] = []
 
     // MARK: - Initialization
 
@@ -159,6 +205,16 @@ class PoseDetector {
 
     func getRepCount() -> Int {
         return repCount
+    }
+
+    // ML Training Data methods
+    func getMLFrameData() -> [MLFrameData] {
+        return mlFrameData
+    }
+
+    func clearMLFrameData() {
+        mlFrameData.removeAll()
+        frameCounter = 0
     }
 
     // MARK: - Exercise-Specific Detection
@@ -366,7 +422,7 @@ class PoseDetector {
             validationMessage = "Keep legs straight"
         }
 
-        return PoseState(
+        let poseState = PoseState(
             exerciseType: exerciseType,
             currentPhase: currentPhase,
             confidence: confidence,
@@ -374,6 +430,20 @@ class PoseDetector {
             isValidRep: currentPhase != "kneeDown" && legAngle >= pushupLegStraightMin,
             validationMessage: validationMessage
         )
+
+        // Capture ML training data
+        let kneeDropDist = groundLineY - kneeY  // Distance knee is below ground line
+        captureMLFrameData(
+            landmarks: landmarks,
+            poseState: poseState,
+            armAngle: armAngle,
+            legAngle: legAngle,
+            torsoAngle: nil,
+            shoulderDropPercentage: shoulderDropPercent,
+            kneeDropDistance: kneesDown ? kneeDropDist : nil
+        )
+
+        return poseState
     }
 
     private func detectSquatPose(landmarks: [NormalizedLandmark]) -> PoseState {
@@ -436,59 +506,118 @@ class PoseDetector {
         let keyLandmarks = usingLeftSide ? [leftHip, leftKnee, leftAnkle] : [rightHip, rightKnee, rightAnkle]
         let confidence = calculateConfidence(landmarks: keyLandmarks)
 
-        return PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: repCount)
+        let poseState = PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: repCount)
+
+        // Capture ML training data
+        captureMLFrameData(
+            landmarks: landmarks,
+            poseState: poseState,
+            armAngle: nil,
+            legAngle: legAngle,
+            torsoAngle: nil,
+            shoulderDropPercentage: nil,
+            kneeDropDistance: nil
+        )
+
+        return poseState
     }
 
     private func detectSitupPose(landmarks: [NormalizedLandmark]) -> PoseState {
         // Get key landmarks for situp analysis
-        let leftEar = landmarks[LandmarkIndices.leftEar]
-        let rightEar = landmarks[LandmarkIndices.rightEar]
+        let nose = landmarks[0]  // Using nose as head reference
         let leftShoulder = landmarks[LandmarkIndices.leftShoulder]
         let rightShoulder = landmarks[LandmarkIndices.rightShoulder]
         let leftHip = landmarks[LandmarkIndices.leftHip]
         let rightHip = landmarks[LandmarkIndices.rightHip]
+        let leftKnee = landmarks[LandmarkIndices.leftKnee]
+        let rightKnee = landmarks[LandmarkIndices.rightKnee]
 
-        // Calculate torso angle (ear-shoulder-hip)
-        let avgEarY = (leftEar.y + rightEar.y) / 2
-        let avgShoulderY = (leftShoulder.y + rightShoulder.y) / 2
-        let avgHipY = (leftHip.y + rightHip.y) / 2
+        // Check visibility of key landmarks
+        let keyLandmarks = [nose, leftShoulder, rightShoulder, leftHip, rightHip]
+        let visibleCount = keyLandmarks.filter { $0.visibility > 0.5 }.count
 
-        // Determine phase based on relative positions
-        let earShoulderDiff = avgEarY - avgShoulderY
-        let shoulderHipDiff = avgShoulderY - avgHipY
-        let torsoAngle = atan2(earShoulderDiff, shoulderHipDiff) * 180 / Float.pi
+        guard visibleCount >= 4 else {
+            NSLog("Debug_Situp: ⚠️ Insufficient landmark visibility (%d/5)", visibleCount)
+            return PoseState(exerciseType: exerciseType, currentPhase: "unknown", confidence: 0.0, repCount: repCount)
+        }
 
+        // Calculate average positions
+        let avgShoulder = NormalizedLandmark(
+            x: (leftShoulder.x + rightShoulder.x) / 2,
+            y: (leftShoulder.y + rightShoulder.y) / 2,
+            z: (leftShoulder.z + rightShoulder.z) / 2,
+            visibility: min(leftShoulder.visibility, rightShoulder.visibility),
+            presence: min(leftShoulder.presence, rightShoulder.presence)
+        )
+
+        let avgHip = NormalizedLandmark(
+            x: (leftHip.x + rightHip.x) / 2,
+            y: (leftHip.y + rightHip.y) / 2,
+            z: (leftHip.z + rightHip.z) / 2,
+            visibility: min(leftHip.visibility, rightHip.visibility),
+            presence: min(leftHip.presence, rightHip.presence)
+        )
+
+        // Calculate torso angle: hip -> shoulder -> nose
+        // When lying flat: angle ~180° (straight line)
+        // When sitting up: angle <90° (torso bent forward)
+        let torsoAngle = calculateAngle(point1: avgHip, point2: avgShoulder, point3: nose)
+
+        // Determine current phase based on torso angle
         let currentPhase: String
-        if torsoAngle > 45 {
-            currentPhase = "up"     // Sitting up
-        } else if torsoAngle < 15 {
-            currentPhase = "down"   // Lying down
+        if torsoAngle < situpTorsoAngleUp {
+            currentPhase = "up"    // Sitting up - torso bent forward
+        } else if torsoAngle > situpTorsoAngleDown {
+            currentPhase = "down"  // Lying down - torso nearly flat
         } else {
-            currentPhase = "mid"
+            currentPhase = "mid"   // Transition
         }
 
-        // Count reps on phase transitions (simple state tracking - no validation for situp yet)
-        if lastPhase == "down" && currentPhase == "up" && !isTransitioning {
-            repCount += 1
-            NSLog("Debug_Situp: ✅ REP COUNTED! Total reps: %d", repCount)
-            isTransitioning = true
+        // Debug logging for situp detection
+        NSLog("Debug_Situp: iOS Situp Analysis")
+        NSLog("Debug_Situp: Nose Y=%.3f, Shoulder Y=%.3f, Hip Y=%.3f", nose.y, avgShoulder.y, avgHip.y)
+        NSLog("Debug_Situp: Torso Angle=%.1f° (thresholds: up<%.0f, down>%.0f)", torsoAngle, situpTorsoAngleUp, situpTorsoAngleDown)
+        NSLog("Debug_Situp: Phase Detected=%@, RecordedUp=%@, RecordedDown=%@", currentPhase, recordedUp ? "Yes" : "No", recordedDown ? "Yes" : "No")
+
+        // State machine for rep counting
+        if currentPhase == "up" {
+            if !recordedUp {
+                recordedUp = true
+                NSLog("Debug_Situp: ⭐ RECORDED UP POSITION")
+            } else if recordedUp && recordedDown {
+                // Complete rep: up -> down -> up
+                repCount += 1
+                NSLog("Debug_Situp: ✅ REP COUNTED! Total reps: %d", repCount)
+                recordedDown = false
+            }
         } else if currentPhase == "down" {
-            isTransitioning = false
-        }
-
-        // Update lastPhase for tracking transitions
-        if currentPhase != "mid" {
-            lastPhase = currentPhase
+            if recordedUp && !recordedDown {
+                recordedDown = true
+                NSLog("Debug_Situp: 🎯 RECORDED DOWN POSITION")
+            }
+        } else if currentPhase == "unknown" {
+            // Reset state if landmarks not visible
+            recordedUp = false
+            recordedDown = false
         }
 
         // Calculate confidence
-        let keyLandmarks = [leftEar, rightEar, leftShoulder, rightShoulder, leftHip, rightHip]
         let confidence = calculateConfidence(landmarks: keyLandmarks)
 
-        // Detailed pose logging disabled for normal operation
-        // NSLog("Debug_Media: PoseDetector iOS: Situp - torsoAngle=%.1f, phase=%@, reps=%d", torsoAngle, currentPhase, repCount)
+        let poseState = PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: repCount)
 
-        return PoseState(exerciseType: exerciseType, currentPhase: currentPhase, confidence: confidence, repCount: repCount)
+        // Capture ML training data
+        captureMLFrameData(
+            landmarks: landmarks,
+            poseState: poseState,
+            armAngle: nil,
+            legAngle: nil,
+            torsoAngle: torsoAngle,
+            shoulderDropPercentage: nil,
+            kneeDropDistance: nil
+        )
+
+        return poseState
     }
 
     // MARK: - Helper Methods
@@ -1034,5 +1163,131 @@ class PoseDetector {
 
         // All validations passed
         return ValidationResult(isValid: true)
+    }
+
+    // MARK: - ML Training Data Capture
+
+    private func captureMLFrameData(
+        landmarks: [NormalizedLandmark],
+        poseState: PoseState,
+        armAngle: Float?,
+        legAngle: Float?,
+        torsoAngle: Float?,
+        shoulderDropPercentage: Float?,
+        kneeDropDistance: Float?
+    ) {
+        frameCounter += 1
+
+        // Only capture every 10th frame
+        guard frameCounter % 10 == 0 else { return }
+
+        // Skip frames where landmarks are not fully visible (phase is "unknown")
+        guard poseState.currentPhase != "unknown" else {
+            NSLog("Debug_ML: Skipping frame %d - landmarks not fully visible", frameCounter)
+            return
+        }
+
+        // Determine which landmarks to capture based on exercise type
+        let landmarkNames: [(name: String, index: Int)]
+        switch exerciseType {
+        case "pushup":
+            landmarkNames = [
+                ("nose", 0),
+                ("left_shoulder", LandmarkIndices.leftShoulder),
+                ("right_shoulder", LandmarkIndices.rightShoulder),
+                ("left_elbow", LandmarkIndices.leftElbow),
+                ("right_elbow", LandmarkIndices.rightElbow),
+                ("left_wrist", LandmarkIndices.leftWrist),
+                ("right_wrist", LandmarkIndices.rightWrist),
+                ("left_hip", LandmarkIndices.leftHip),
+                ("right_hip", LandmarkIndices.rightHip),
+                ("left_knee", LandmarkIndices.leftKnee),
+                ("right_knee", LandmarkIndices.rightKnee),
+                ("left_ankle", LandmarkIndices.leftAnkle),
+                ("right_ankle", LandmarkIndices.rightAnkle)
+            ]
+        case "squat":
+            landmarkNames = [
+                ("left_shoulder", LandmarkIndices.leftShoulder),
+                ("right_shoulder", LandmarkIndices.rightShoulder),
+                ("left_hip", LandmarkIndices.leftHip),
+                ("right_hip", LandmarkIndices.rightHip),
+                ("left_knee", LandmarkIndices.leftKnee),
+                ("right_knee", LandmarkIndices.rightKnee),
+                ("left_ankle", LandmarkIndices.leftAnkle),
+                ("right_ankle", LandmarkIndices.rightAnkle)
+            ]
+        case "situp":
+            landmarkNames = [
+                ("nose", 0),
+                ("left_shoulder", LandmarkIndices.leftShoulder),
+                ("right_shoulder", LandmarkIndices.rightShoulder),
+                ("left_hip", LandmarkIndices.leftHip),
+                ("right_hip", LandmarkIndices.rightHip),
+                ("left_knee", LandmarkIndices.leftKnee),
+                ("right_knee", LandmarkIndices.rightKnee),
+                ("left_ankle", LandmarkIndices.leftAnkle),
+                ("right_ankle", LandmarkIndices.rightAnkle)
+            ]
+        default:
+            return
+        }
+
+        // Extract landmark data
+        let mlLandmarks = landmarkNames.map { name, index in
+            let landmark = landmarks[index]
+            return MLLandmarkData(
+                name: name,
+                x: landmark.x,
+                y: landmark.y,
+                z: landmark.z ?? 0.0,
+                visibility: landmark.visibility?.floatValue ?? 0.0
+            )
+        }
+
+        // Determine ground truth labels based on current state
+        let labeledPhase = poseState.currentPhase
+        let labeledFormQuality: String
+        if !poseState.isValidRep {
+            // Use validation message to determine form quality
+            if let message = poseState.validationMessage {
+                if message.contains("knee") || message.contains("Knee") {
+                    labeledFormQuality = "knees_down"
+                } else if message.contains("arm") || message.contains("straight") {
+                    labeledFormQuality = "arms_not_straight"
+                } else if message.contains("leg") {
+                    labeledFormQuality = "legs_bent"
+                } else if message.contains("visible") || message.contains("Visible") {
+                    labeledFormQuality = "landmarks_not_visible"
+                } else {
+                    labeledFormQuality = "other_form_issue"
+                }
+            } else {
+                labeledFormQuality = "unknown_issue"
+            }
+        } else {
+            labeledFormQuality = "good"
+        }
+
+        // Create frame data
+        let frameData = MLFrameData(
+            timestamp: Date().timeIntervalSince1970,
+            exerciseType: exerciseType,
+            frameNumber: frameCounter,
+            landmarks: mlLandmarks,
+            armAngle: armAngle,
+            legAngle: legAngle,
+            torsoAngle: torsoAngle,
+            shoulderDropPercentage: shoulderDropPercentage,
+            kneeDropDistance: kneeDropDistance,
+            footStability: nil, // Can be added for squat if needed
+            currentPhase: poseState.currentPhase,
+            isValidForm: poseState.isValidRep,
+            confidence: poseState.confidence,
+            labeledPhase: labeledPhase,
+            labeledFormQuality: labeledFormQuality
+        )
+
+        mlFrameData.append(frameData)
     }
 }

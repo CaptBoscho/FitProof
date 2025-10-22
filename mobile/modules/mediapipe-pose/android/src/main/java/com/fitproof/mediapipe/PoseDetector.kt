@@ -35,6 +35,43 @@ data class LandmarkStats(
     var maxY: Float = Float.MIN_VALUE
 )
 
+// ML Training Data Structures
+data class MLLandmarkData(
+    val name: String,
+    val x: Float,
+    val y: Float,
+    val z: Float,
+    val visibility: Float
+)
+
+data class MLFrameData(
+    val timestamp: Long,
+    val exerciseType: String,
+    val frameNumber: Int,
+
+    // Raw landmarks
+    val landmarks: List<MLLandmarkData>,
+
+    // Computed angles
+    val armAngle: Float?,
+    val legAngle: Float?,
+    val torsoAngle: Float?,
+
+    // Exercise-specific metrics
+    val shoulderDropPercentage: Float?,
+    val kneeDropDistance: Float?,
+    val footStability: Float?,
+
+    // Detection state
+    val currentPhase: String,
+    val isValidForm: Boolean,
+    val confidence: Float,
+
+    // Ground truth labels
+    val labeledPhase: String,      // "up", "down", "mid", etc.
+    val labeledFormQuality: String // "good", "knees_down", "arms_not_straight", etc.
+)
+
 class PoseDetector(private val exerciseType: String) {
 
     companion object {
@@ -84,6 +121,10 @@ class PoseDetector(private val exerciseType: String) {
         // Squat phase detection thresholds (angle-based)
         private const val SQUAT_ANGLE_UP = 160f      // Standing position (leg nearly straight)
         private const val SQUAT_ANGLE_DOWN = 110f    // Squat bottom position (leg bent)
+
+        // Situp phase detection thresholds (angle-based)
+        private const val SITUP_TORSO_ANGLE_UP = 100f    // Sitting up (torso bent forward)
+        private const val SITUP_TORSO_ANGLE_DOWN = 150f  // Lying down (torso nearly flat)
     }
 
     private var lastPhase = "up"
@@ -104,6 +145,10 @@ class PoseDetector(private val exerciseType: String) {
     // Shoulder drop tracking for pushup down position (alternative method)
     private var shoulderYAtUp: Float? = null         // Shoulder Y position when arms are straight (up)
     private var wristYAtUp: Float? = null            // Wrist Y position when arms are straight (up)
+
+    // ML Training Data Capture (every 10th frame)
+    private var frameCounter = 0
+    private val mlFrameData = mutableListOf<MLFrameData>()
 
     fun detectPose(landmarks: List<NormalizedLandmark>): PoseState {
         if (landmarks.size < 33) {
@@ -325,7 +370,7 @@ class PoseDetector(private val exerciseType: String) {
             else -> null
         }
 
-        return PoseState(
+        val poseState = PoseState(
             exerciseType = exerciseType,
             currentPhase = currentPhase,
             confidence = confidence,
@@ -333,6 +378,20 @@ class PoseDetector(private val exerciseType: String) {
             isValidRep = currentPhase != "kneeDown" && legAngle >= PUSHUP_LEG_STRAIGHT_MIN,
             validationMessage = validationMessage
         )
+
+        // Capture ML training data
+        val kneeDropDist = groundLineY - kneeY  // Distance knee is below ground line
+        captureMLFrameData(
+            landmarks = landmarks,
+            poseState = poseState,
+            armAngle = armAngle,
+            legAngle = legAngle,
+            torsoAngle = null,
+            shoulderDropPercentage = shoulderDropPercent,
+            kneeDropDistance = if (kneesDown) kneeDropDist else null
+        )
+
+        return poseState
     }
 
     private fun detectSquatPose(landmarks: List<NormalizedLandmark>): PoseState {
@@ -393,7 +452,7 @@ class PoseDetector(private val exerciseType: String) {
         }
         val confidence = calculateConfidence(keyLandmarks)
 
-        return PoseState(
+        val poseState = PoseState(
             exerciseType = exerciseType,
             currentPhase = currentPhase,
             confidence = confidence,
@@ -401,44 +460,149 @@ class PoseDetector(private val exerciseType: String) {
             isValidRep = validationResult?.isValid ?: true,
             validationMessage = validationResult?.message
         )
+
+        // Capture ML training data
+        captureMLFrameData(
+            landmarks = landmarks,
+            poseState = poseState,
+            armAngle = null,
+            legAngle = legAngle,
+            torsoAngle = null,
+            shoulderDropPercentage = null,
+            kneeDropDistance = null
+        )
+
+        return poseState
     }
 
     private fun detectSitupPose(landmarks: List<NormalizedLandmark>): PoseState {
         // Get key landmarks for situp analysis
-        val leftEar = landmarks[LandmarkIndices.LEFT_EAR]
-        val rightEar = landmarks[LandmarkIndices.RIGHT_EAR]
+        val nose = landmarks[0]  // Using nose as head reference
         val leftShoulder = landmarks[LandmarkIndices.LEFT_SHOULDER]
         val rightShoulder = landmarks[LandmarkIndices.RIGHT_SHOULDER]
         val leftHip = landmarks[LandmarkIndices.LEFT_HIP]
         val rightHip = landmarks[LandmarkIndices.RIGHT_HIP]
+        val leftKnee = landmarks[LandmarkIndices.LEFT_KNEE]
+        val rightKnee = landmarks[LandmarkIndices.RIGHT_KNEE]
 
-        // Calculate torso angle (ear-shoulder-hip)
-        val avgEarY = (leftEar.y() + rightEar.y()) / 2
-        val avgShoulderY = (leftShoulder.y() + rightShoulder.y()) / 2
-        val avgHipY = (leftHip.y() + rightHip.y()) / 2
-
-        // Determine phase based on relative positions
-        val earShoulderDiff = avgEarY - avgShoulderY
-        val shoulderHipDiff = avgShoulderY - avgHipY
-        val torsoAngle = atan2(earShoulderDiff, shoulderHipDiff) * 180 / PI
-
-        val currentPhase = when {
-            torsoAngle > 45 -> "up"     // Sitting up
-            torsoAngle < 15 -> "down"   // Lying down
-            else -> "mid"
+        // Check visibility of key landmarks
+        val keyLandmarks = listOf(nose, leftShoulder, rightShoulder, leftHip, rightHip)
+        val visibleCount = keyLandmarks.count {
+            it.visibility().isPresent && it.visibility().get() > 0.5f
         }
 
-        // Count reps on phase transitions
-        updateRepCount(currentPhase)
+        if (visibleCount < 4) {
+            android.util.Log.d("Debug_Situp", "⚠️ Insufficient landmark visibility ($visibleCount/5)")
+            return PoseState(exerciseType, "unknown", 0f, repCount)
+        }
+
+        // Calculate average positions
+        val avgShoulderX = (leftShoulder.x() + rightShoulder.x()) / 2
+        val avgShoulderY = (leftShoulder.y() + rightShoulder.y()) / 2
+        val avgShoulderZ = (leftShoulder.z() + rightShoulder.z()) / 2
+
+        val avgHipX = (leftHip.x() + rightHip.x()) / 2
+        val avgHipY = (leftHip.y() + rightHip.y()) / 2
+        val avgHipZ = (leftHip.z() + rightHip.z()) / 2
+
+        // Create virtual landmarks for average shoulder and hip
+        val avgShoulder = object : NormalizedLandmark {
+            override fun x() = avgShoulderX
+            override fun y() = avgShoulderY
+            override fun z() = avgShoulderZ
+            override fun visibility() = java.util.Optional.of(
+                minOf(
+                    leftShoulder.visibility().orElse(0f),
+                    rightShoulder.visibility().orElse(0f)
+                )
+            )
+            override fun presence() = java.util.Optional.of(
+                minOf(
+                    leftShoulder.presence().orElse(0f),
+                    rightShoulder.presence().orElse(0f)
+                )
+            )
+        }
+
+        val avgHip = object : NormalizedLandmark {
+            override fun x() = avgHipX
+            override fun y() = avgHipY
+            override fun z() = avgHipZ
+            override fun visibility() = java.util.Optional.of(
+                minOf(
+                    leftHip.visibility().orElse(0f),
+                    rightHip.visibility().orElse(0f)
+                )
+            )
+            override fun presence() = java.util.Optional.of(
+                minOf(
+                    leftHip.presence().orElse(0f),
+                    rightHip.presence().orElse(0f)
+                )
+            )
+        }
+
+        // Calculate torso angle: hip -> shoulder -> nose
+        // When lying flat: angle ~180° (straight line)
+        // When sitting up: angle <90° (torso bent forward)
+        val torsoAngle = calculateAngle(avgHip, avgShoulder, nose)
+
+        // Determine current phase based on torso angle
+        val currentPhase = when {
+            torsoAngle < SITUP_TORSO_ANGLE_UP -> "up"    // Sitting up - torso bent forward
+            torsoAngle > SITUP_TORSO_ANGLE_DOWN -> "down"  // Lying down - torso nearly flat
+            else -> "mid"   // Transition
+        }
+
+        // Debug logging for situp detection
+        android.util.Log.d("Debug_Situp", "Android Situp Analysis")
+        android.util.Log.d("Debug_Situp", "Nose Y=${nose.y()}, Shoulder Y=$avgShoulderY, Hip Y=$avgHipY")
+        android.util.Log.d("Debug_Situp", "Torso Angle=${torsoAngle}° (thresholds: up<$SITUP_TORSO_ANGLE_UP, down>$SITUP_TORSO_ANGLE_DOWN)")
+        android.util.Log.d("Debug_Situp", "Phase Detected=$currentPhase, RecordedUp=${if (recordedUp) "Yes" else "No"}, RecordedDown=${if (recordedDown) "Yes" else "No"}")
+
+        // State machine for rep counting
+        when (currentPhase) {
+            "up" -> {
+                if (!recordedUp) {
+                    recordedUp = true
+                    android.util.Log.d("Debug_Situp", "⭐ RECORDED UP POSITION")
+                } else if (recordedUp && recordedDown) {
+                    // Complete rep: up -> down -> up
+                    repCount++
+                    android.util.Log.d("Debug_Situp", "✅ REP COUNTED! Total reps: $repCount")
+                    recordedDown = false
+                }
+            }
+            "down" -> {
+                if (recordedUp && !recordedDown) {
+                    recordedDown = true
+                    android.util.Log.d("Debug_Situp", "🎯 RECORDED DOWN POSITION")
+                }
+            }
+            "unknown" -> {
+                // Reset state if landmarks not visible
+                recordedUp = false
+                recordedDown = false
+            }
+        }
 
         // Calculate confidence
-        val confidence = calculateConfidence(listOf(
-            leftEar, rightEar, leftShoulder, rightShoulder, leftHip, rightHip
-        ))
+        val confidence = calculateConfidence(keyLandmarks)
 
-        println("PoseDetector: Situp - torsoAngle=$torsoAngle, phase=$currentPhase, reps=$repCount")
+        val poseState = PoseState(exerciseType, currentPhase, confidence, repCount)
 
-        return PoseState(exerciseType, currentPhase, confidence, repCount)
+        // Capture ML training data
+        captureMLFrameData(
+            landmarks = landmarks,
+            poseState = poseState,
+            armAngle = null,
+            legAngle = null,
+            torsoAngle = torsoAngle,
+            shoulderDropPercentage = null,
+            kneeDropDistance = null
+        )
+
+        return poseState
     }
 
     private fun calculateAngle(point1: NormalizedLandmark, point2: NormalizedLandmark, point3: NormalizedLandmark): Float {
@@ -584,6 +748,14 @@ class PoseDetector(private val exerciseType: String) {
     }
 
     fun getRepCount(): Int = repCount
+
+    // ML Training Data methods
+    fun getMLFrameData(): List<MLFrameData> = mlFrameData
+
+    fun clearMLFrameData() {
+        mlFrameData.clear()
+        frameCounter = 0
+    }
 
     // MARK: - Pushup Validation Methods
 
@@ -946,5 +1118,118 @@ class PoseDetector(private val exerciseType: String) {
 
         // All validations passed
         return ValidationResult(true)
+    }
+
+    // ML Training Data Capture
+
+    private fun captureMLFrameData(
+        landmarks: List<NormalizedLandmark>,
+        poseState: PoseState,
+        armAngle: Float?,
+        legAngle: Float?,
+        torsoAngle: Float?,
+        shoulderDropPercentage: Float?,
+        kneeDropDistance: Float?
+    ) {
+        frameCounter++
+
+        // Only capture every 10th frame
+        if (frameCounter % 10 != 0) return
+
+        // Skip frames where landmarks are not fully visible (phase is "unknown")
+        if (poseState.currentPhase == "unknown") {
+            android.util.Log.d("Debug_ML", "Skipping frame $frameCounter - landmarks not fully visible")
+            return
+        }
+
+        // Determine which landmarks to capture based on exercise type
+        val landmarkNames = when (exerciseType) {
+            "pushup" -> listOf(
+                "nose" to 0,
+                "left_shoulder" to LandmarkIndices.LEFT_SHOULDER,
+                "right_shoulder" to LandmarkIndices.RIGHT_SHOULDER,
+                "left_elbow" to LandmarkIndices.LEFT_ELBOW,
+                "right_elbow" to LandmarkIndices.RIGHT_ELBOW,
+                "left_wrist" to LandmarkIndices.LEFT_WRIST,
+                "right_wrist" to LandmarkIndices.RIGHT_WRIST,
+                "left_hip" to LandmarkIndices.LEFT_HIP,
+                "right_hip" to LandmarkIndices.RIGHT_HIP,
+                "left_knee" to LandmarkIndices.LEFT_KNEE,
+                "right_knee" to LandmarkIndices.RIGHT_KNEE,
+                "left_ankle" to LandmarkIndices.LEFT_ANKLE,
+                "right_ankle" to LandmarkIndices.RIGHT_ANKLE
+            )
+            "squat" -> listOf(
+                "left_shoulder" to LandmarkIndices.LEFT_SHOULDER,
+                "right_shoulder" to LandmarkIndices.RIGHT_SHOULDER,
+                "left_hip" to LandmarkIndices.LEFT_HIP,
+                "right_hip" to LandmarkIndices.RIGHT_HIP,
+                "left_knee" to LandmarkIndices.LEFT_KNEE,
+                "right_knee" to LandmarkIndices.RIGHT_KNEE,
+                "left_ankle" to LandmarkIndices.LEFT_ANKLE,
+                "right_ankle" to LandmarkIndices.RIGHT_ANKLE
+            )
+            "situp" -> listOf(
+                "nose" to 0,
+                "left_shoulder" to LandmarkIndices.LEFT_SHOULDER,
+                "right_shoulder" to LandmarkIndices.RIGHT_SHOULDER,
+                "left_hip" to LandmarkIndices.LEFT_HIP,
+                "right_hip" to LandmarkIndices.RIGHT_HIP,
+                "left_knee" to LandmarkIndices.LEFT_KNEE,
+                "right_knee" to LandmarkIndices.RIGHT_KNEE,
+                "left_ankle" to LandmarkIndices.LEFT_ANKLE,
+                "right_ankle" to LandmarkIndices.RIGHT_ANKLE
+            )
+            else -> return
+        }
+
+        // Extract landmark data
+        val mlLandmarks = landmarkNames.map { (name, index) ->
+            val landmark = landmarks[index]
+            MLLandmarkData(
+                name = name,
+                x = landmark.x(),
+                y = landmark.y(),
+                z = landmark.z().orElse(0f),
+                visibility = landmark.visibility().orElse(0f)
+            )
+        }
+
+        // Determine ground truth labels based on current state
+        val labeledPhase = poseState.currentPhase
+        val labeledFormQuality = if (!poseState.isValidRep) {
+            // Use validation message to determine form quality
+            val message = poseState.validationMessage
+            when {
+                message?.contains("knee", ignoreCase = true) == true -> "knees_down"
+                message?.contains("arm", ignoreCase = true) == true || message?.contains("straight", ignoreCase = true) == true -> "arms_not_straight"
+                message?.contains("leg", ignoreCase = true) == true -> "legs_bent"
+                message?.contains("visible", ignoreCase = true) == true -> "landmarks_not_visible"
+                else -> "other_form_issue"
+            }
+        } else {
+            "good"
+        }
+
+        // Create frame data
+        val frameData = MLFrameData(
+            timestamp = System.currentTimeMillis(),
+            exerciseType = exerciseType,
+            frameNumber = frameCounter,
+            landmarks = mlLandmarks,
+            armAngle = armAngle,
+            legAngle = legAngle,
+            torsoAngle = torsoAngle,
+            shoulderDropPercentage = shoulderDropPercentage,
+            kneeDropDistance = kneeDropDistance,
+            footStability = null, // Can be added for squat if needed
+            currentPhase = poseState.currentPhase,
+            isValidForm = poseState.isValidRep,
+            confidence = poseState.confidence,
+            labeledPhase = labeledPhase,
+            labeledFormQuality = labeledFormQuality
+        )
+
+        mlFrameData.add(frameData)
     }
 }

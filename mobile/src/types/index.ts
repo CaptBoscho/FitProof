@@ -63,6 +63,14 @@ export type RootStackParamList = {
   Workout: {
     exerciseId: string;
   };
+  WorkoutSummary: {
+    exerciseType: string;
+    duration: number;
+    totalReps: number;
+    validReps: number;
+    invalidReps: number;
+    formErrors: string[];
+  };
   Profile: undefined;
   EditProfile: undefined;
   Settings: undefined;

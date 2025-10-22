@@ -124,9 +124,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = () => {
   const toggleAuthMode = () => {
     setIsLogin(!isLogin);
     setEmail('');
-    setUsername('corbin.byers@gmail.com');
-    setPassword('B@cker36');
-    setConfirmPassword('B@cker36');
+    setUsername('');
+    setPassword('');
+    setConfirmPassword('');
     setValidationErrors({});
   };
 

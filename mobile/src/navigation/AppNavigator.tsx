@@ -9,6 +9,7 @@ import { ProfileScreen } from '../screens/ProfileScreen';
 import { EditProfileScreen } from '../screens/EditProfileScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { MediaPipeDemoScreen } from '../screens/MediaPipeDemoScreen';
+import { WorkoutSummaryScreen } from '../screens/WorkoutSummaryScreen';
 import { RootStackParamList } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { ProtectedRoute } from '../components/ProtectedRoute';
@@ -139,6 +140,21 @@ export const AppNavigator: React.FC = () => {
               {({ navigation, route }) => (
                 <ProtectedRoute requireAuth={true}>
                   <SettingsScreen navigation={navigation} route={route} />
+                </ProtectedRoute>
+              )}
+            </Stack.Screen>
+            <Stack.Screen
+              name="WorkoutSummary"
+              options={{
+                headerShown: true,
+                title: 'Workout Summary',
+                headerBackTitleVisible: false,
+                headerLeft: () => null, // Disable back button
+              }}
+            >
+              {({ navigation, route }) => (
+                <ProtectedRoute requireAuth={true}>
+                  <WorkoutSummaryScreen navigation={navigation} route={route} />
                 </ProtectedRoute>
               )}
             </Stack.Screen>

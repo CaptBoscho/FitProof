@@ -1,6 +1,7 @@
 import UIKit
 import AVFoundation
 import MediaPipeTasksVision
+import AudioToolbox
 
 class CameraViewController: UIViewController {
 
@@ -20,6 +21,9 @@ class CameraViewController: UIViewController {
     private var backButton: UIButton!
     private var repCountLabel: UILabel!
     private var poseStatusLabel: UILabel!
+    private var confidenceLabel: UILabel!
+    private var feedbackMessageLabel: UILabel!
+    private var formFeedbackView: UIView!
     private var overlayView: PoseLandmarkOverlayView!
     private var countdownLabel: UILabel!
 
@@ -33,6 +37,13 @@ class CameraViewController: UIViewController {
     private var repCount: Int = 0
     private var poseDetector: PoseDetector?
     private var isCleanedUp = false
+
+    // Session tracking
+    private var sessionStartTime: Date?
+    private var validReps: Int = 0
+    private var invalidReps: Int = 0
+    private var formErrors: [String] = []
+    private var lastRepWasValid: Bool = true
 
     // MARK: - Lifecycle
 
@@ -159,6 +170,42 @@ class CameraViewController: UIViewController {
         poseStatusLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(poseStatusLabel)
 
+        // Create confidence label
+        confidenceLabel = UILabel()
+        confidenceLabel.text = "Confidence: --"
+        confidenceLabel.textColor = .white
+        confidenceLabel.font = UIFont.systemFont(ofSize: 16, weight: .medium)
+        confidenceLabel.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        confidenceLabel.textAlignment = .center
+        confidenceLabel.layer.cornerRadius = 8
+        confidenceLabel.clipsToBounds = true
+        confidenceLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(confidenceLabel)
+
+        // Create feedback message label (bottom center)
+        feedbackMessageLabel = UILabel()
+        feedbackMessageLabel.text = ""
+        feedbackMessageLabel.textColor = .white
+        feedbackMessageLabel.font = UIFont.systemFont(ofSize: 18, weight: .semibold)
+        feedbackMessageLabel.backgroundColor = UIColor.orange.withAlphaComponent(0.9)
+        feedbackMessageLabel.textAlignment = .center
+        feedbackMessageLabel.numberOfLines = 2
+        feedbackMessageLabel.layer.cornerRadius = 12
+        feedbackMessageLabel.clipsToBounds = true
+        feedbackMessageLabel.isHidden = true
+        feedbackMessageLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(feedbackMessageLabel)
+
+        // Create form feedback view (green/red overlay)
+        formFeedbackView = UIView()
+        formFeedbackView.backgroundColor = .clear
+        formFeedbackView.layer.borderWidth = 8
+        formFeedbackView.layer.borderColor = UIColor.clear.cgColor
+        formFeedbackView.layer.cornerRadius = 16
+        formFeedbackView.isUserInteractionEnabled = false
+        formFeedbackView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(formFeedbackView)
+
         // Create countdown label (center of screen)
         countdownLabel = UILabel()
         countdownLabel.text = "5"
@@ -196,6 +243,25 @@ class CameraViewController: UIViewController {
             poseStatusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
             poseStatusLabel.heightAnchor.constraint(equalToConstant: 35),
             poseStatusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
+
+            // Confidence label (below pose status)
+            confidenceLabel.topAnchor.constraint(equalTo: poseStatusLabel.bottomAnchor, constant: 8),
+            confidenceLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            confidenceLabel.heightAnchor.constraint(equalToConstant: 30),
+            confidenceLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+
+            // Feedback message label (bottom center)
+            feedbackMessageLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -80),
+            feedbackMessageLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            feedbackMessageLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 32),
+            feedbackMessageLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -32),
+            feedbackMessageLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 50),
+
+            // Form feedback overlay (fullscreen with padding)
+            formFeedbackView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 80),
+            formFeedbackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            formFeedbackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            formFeedbackView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
 
             // Countdown label (center)
             countdownLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -256,21 +322,60 @@ class CameraViewController: UIViewController {
     }
 
     private func setupCamera() {
+        // Check camera permissions first
+        let authStatus = AVCaptureDevice.authorizationStatus(for: .video)
+
+        switch authStatus {
+        case .authorized:
+            // Permission already granted, proceed with setup
+            setupCameraSession()
+        case .notDetermined:
+            // Request permission
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        self?.setupCameraSession()
+                    } else {
+                        self?.showCameraPermissionDenied()
+                    }
+                }
+            }
+        case .denied, .restricted:
+            // Permission denied, show error
+            showCameraPermissionDenied()
+        @unknown default:
+            NSLog("Debug_Media: ⚠️ Unknown camera permission status")
+            showCameraPermissionDenied()
+        }
+    }
+
+    private func setupCameraSession() {
         captureSession = AVCaptureSession()
-        guard let captureSession = captureSession else { return }
+        guard let captureSession = captureSession else {
+            showAlert(title: "Camera Error", message: "Failed to initialize camera session. Please try again.")
+            return
+        }
 
         captureSession.beginConfiguration()
         captureSession.sessionPreset = .hd1280x720
 
         // Add camera input (front camera)
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
-              let input = try? AVCaptureDeviceInput(device: camera) else {
+        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
             captureSession.commitConfiguration()
+            showAlert(title: "Camera Unavailable", message: "Front camera not available on this device.")
             return
         }
 
-        if captureSession.canAddInput(input) {
-            captureSession.addInput(input)
+        do {
+            let input = try AVCaptureDeviceInput(device: camera)
+            if captureSession.canAddInput(input) {
+                captureSession.addInput(input)
+            }
+        } catch {
+            captureSession.commitConfiguration()
+            NSLog("Debug_Media: ⚠️ Failed to create camera input: %@", error.localizedDescription)
+            showAlert(title: "Camera Error", message: "Failed to access camera: \(error.localizedDescription)")
+            return
         }
 
         // Add video output
@@ -357,6 +462,9 @@ class CameraViewController: UIViewController {
     @objc private func backButtonTapped() {
         NSLog("Debug_Media: 🔙 Back button tapped - starting cleanup...")
 
+        // Print session summary before exiting
+        printSessionSummary()
+
         // Comprehensive cleanup to prevent crashes
         cleanup()
 
@@ -366,6 +474,32 @@ class CameraViewController: UIViewController {
                 NSLog("Debug_Media: 🔙 View controller dismissed successfully")
             }
         }
+    }
+
+    private func printSessionSummary() {
+        guard let startTime = sessionStartTime else {
+            NSLog("Debug_Session: No session data to summarize")
+            return
+        }
+
+        let duration = Date().timeIntervalSince(startTime)
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+
+        NSLog("Debug_Session: ==================== SESSION SUMMARY ====================")
+        NSLog("Debug_Session: Exercise: %@", exerciseType.capitalized)
+        NSLog("Debug_Session: Duration: %dm %ds", minutes, seconds)
+        NSLog("Debug_Session: Total Reps: %d", repCount)
+        NSLog("Debug_Session: Valid Reps: %d (%.1f%%)", validReps, repCount > 0 ? Float(validReps) / Float(repCount) * 100 : 0)
+        NSLog("Debug_Session: Invalid Reps: %d (%.1f%%)", invalidReps, repCount > 0 ? Float(invalidReps) / Float(repCount) * 100 : 0)
+        if !formErrors.isEmpty {
+            let errorCounts = Dictionary(grouping: formErrors, by: { $0 }).mapValues { $0.count }
+            NSLog("Debug_Session: Common Errors:")
+            for (error, count) in errorCounts.sorted(by: { $0.value > $1.value }) {
+                NSLog("Debug_Session:   - %@ (%d times)", error, count)
+            }
+        }
+        NSLog("Debug_Session: =======================================================")
     }
 
     private func cleanup() {
@@ -411,15 +545,129 @@ class CameraViewController: UIViewController {
     }
 
     private func updateRepCount(_ newCount: Int) {
+        let oldCount = repCount
         repCount = newCount
+
         DispatchQueue.main.async { [weak self] in
             self?.repCountLabel.text = "Reps: \(self?.repCount ?? 0)"
+
+            // Trigger haptic feedback when rep count increases
+            if newCount > oldCount {
+                let generator = UINotificationFeedbackGenerator()
+                generator.notificationOccurred(.success)
+                NSLog("Debug_Media: 🎉 Haptic feedback triggered for rep #%d", newCount)
+            }
         }
+    }
+
+    private func updateFormFeedback(isValid: Bool, confidence: Float) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            // Update confidence label
+            let confidencePercent = Int(confidence * 100)
+            self.confidenceLabel.text = String(format: "Confidence: %d%%", confidencePercent)
+
+            // Update form feedback overlay color
+            // Only show feedback after countdown
+            guard !self.isCountdownActive else {
+                self.formFeedbackView.layer.borderColor = UIColor.clear.cgColor
+                return
+            }
+
+            if confidence < 0.5 {
+                // Low confidence - yellow warning
+                self.formFeedbackView.layer.borderColor = UIColor.yellow.withAlphaComponent(0.5).cgColor
+            } else if isValid {
+                // Good form - green
+                self.formFeedbackView.layer.borderColor = UIColor.green.withAlphaComponent(0.6).cgColor
+            } else {
+                // Invalid form - red
+                self.formFeedbackView.layer.borderColor = UIColor.red.withAlphaComponent(0.6).cgColor
+            }
+        }
+    }
+
+    private func showFeedbackMessage(_ message: String, duration: TimeInterval = 3.0) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, !self.isCountdownActive else { return }
+
+            self.feedbackMessageLabel.text = message
+            self.feedbackMessageLabel.isHidden = false
+
+            // Auto-hide after duration
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+                self?.feedbackMessageLabel.isHidden = true
+            }
+        }
+    }
+
+    private func getFeedbackMessage(for validationMessage: String?, phase: String) -> String? {
+        // Return nil if no validation message or if in valid state
+        guard let message = validationMessage, !message.isEmpty else { return nil }
+
+        // Map validation messages to user-friendly instructions
+        switch phase {
+        case "kneeDown":
+            return "⚠️ Keep knees off the ground"
+        case "unknown":
+            return "⚠️ Position your full body in view"
+        case "mid":
+            if message.contains("leg") || message.contains("knee") {
+                return "💪 Keep your legs straight"
+            }
+            return nil // Mid is normal transition
+        default:
+            // Generic feedback for other validation messages
+            if message.contains("arm") {
+                return "💪 Full range of motion with arms"
+            } else if message.contains("leg") {
+                return "🦵 Keep legs straight"
+            } else if message.contains("depth") {
+                return "⬇️ Go lower for full squat"
+            }
+            return nil
+        }
+    }
+
+    private func playSuccessSound() {
+        // Play system sound for success (like a light tap)
+        AudioServicesPlaySystemSound(1057) // Tock sound
+    }
+
+    private func playErrorSound() {
+        // Play system sound for error
+        AudioServicesPlaySystemSound(1053) // Short low beep
+    }
+
+    private func showCameraPermissionDenied() {
+        let alert = UIAlertController(
+            title: "Camera Permission Required",
+            message: "FitProof needs camera access to track your exercises. Please enable camera access in Settings.",
+            preferredStyle: .alert
+        )
+
+        alert.addAction(UIAlertAction(title: "Open Settings", style: .default) { _ in
+            if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(settingsURL)
+            }
+        })
+
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            self?.dismiss(animated: true)
+        })
+
+        present(alert, animated: true)
     }
 
     private func showAlert(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+            // Dismiss the camera view if there's a critical error
+            if title.contains("Error") || title.contains("Unavailable") {
+                self?.dismiss(animated: true)
+            }
+        })
         present(alert, animated: true)
     }
 
@@ -462,6 +710,10 @@ class CameraViewController: UIViewController {
         countdownTimer?.invalidate()
         countdownTimer = nil
         isCountdownActive = false
+
+        // Start session tracking
+        sessionStartTime = Date()
+        NSLog("Debug_Session: Session started at %@", sessionStartTime?.description ?? "unknown")
 
         // Show "GO!" briefly then hide
         countdownLabel.text = "GO!"
@@ -568,6 +820,32 @@ extension CameraViewController: PoseLandmarkerLiveStreamDelegate {
             // Update rep count if it changed
             if poseState.repCount != repCount {
                 updateRepCount(poseState.repCount)
+                // Track rep validity for session stats
+                if poseState.isValidRep {
+                    validReps += 1
+                    NSLog("Debug_Session: ✅ Valid rep #%d", validReps)
+                } else {
+                    invalidReps += 1
+                    if let msg = poseState.validationMessage, !msg.isEmpty {
+                        formErrors.append(msg)
+                    }
+                    NSLog("Debug_Session: ❌ Invalid rep #%d - %@", invalidReps, poseState.validationMessage ?? "unknown error")
+                }
+                lastRepWasValid = poseState.isValidRep
+                // Play success sound on rep completion
+                playSuccessSound()
+            }
+
+            // Update form feedback with confidence and validation status
+            updateFormFeedback(isValid: poseState.isValidRep, confidence: poseState.confidence)
+
+            // Show feedback message if there's a validation issue
+            if !poseState.isValidRep {
+                if let feedbackMsg = getFeedbackMessage(for: poseState.validationMessage, phase: poseState.currentPhase) {
+                    showFeedbackMessage(feedbackMsg)
+                    // Play error sound for form issues
+                    playErrorSound()
+                }
             }
 
             // Log rep count changes only
