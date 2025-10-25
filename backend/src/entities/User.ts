@@ -36,6 +36,14 @@ export class User {
   @Column({ type: 'int', name: 'current_streak', default: 0 })
   currentStreak: number;
 
+  @Field(() => Int)
+  @Column({ type: 'int', name: 'longest_streak', default: 0 })
+  longestStreak: number;
+
+  @Field(() => Int)
+  @Column({ type: 'int', name: 'rest_days_used', default: 0 })
+  restDaysUsed: number;
+
   @Field(() => Date, { nullable: true })
   @Column({ type: 'timestamp', name: 'last_workout_date', nullable: true })
   lastWorkoutDate: Date | null;

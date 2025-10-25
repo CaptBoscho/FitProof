@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Platform, ScrollView } from 'react-native';
 import { PermissionsAndroid } from 'react-native';
 import { BaseScreenProps } from '../types';
 import { CONFIG } from '../constants/config';
 import { useAuth } from '../contexts/AuthContext';
+import { SyncStatusBadge } from '../components/SyncStatusBadge';
 
 interface HomeScreenProps extends BaseScreenProps {}
 
@@ -76,47 +77,62 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Welcome back, {user?.username || 'User'}!</Text>
-        <Text style={styles.subtitle}>Ready to crush your fitness goals?</Text>
-        <TouchableOpacity style={styles.logoutButton} onPress={logout}>
-          <Text style={styles.logoutButtonText}>Logout</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.userInfo}>
-        <Text style={styles.userInfoText}>Logged in as: {user?.email}</Text>
-        <Text style={styles.userInfoText}>Username: {user?.username}</Text>
-      </View>
-
-      <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{user?.totalPoints || 0}</Text>
-          <Text style={styles.statLabel}>Total Points</Text>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollViewContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.header}>
+          <View style={styles.headerTop}>
+            <View style={styles.headerTextContainer}>
+              <Text style={styles.title}>Welcome back, {user?.username || 'User'}!</Text>
+              <Text style={styles.subtitle}>Ready to crush your fitness goals?</Text>
+            </View>
+            <SyncStatusBadge variant="compact" />
+          </View>
+          <TouchableOpacity style={styles.logoutButton} onPress={logout}>
+            <Text style={styles.logoutButtonText}>Logout</Text>
+          </TouchableOpacity>
         </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{user?.currentStreak || 0}</Text>
-          <Text style={styles.statLabel}>Current Streak</Text>
+
+        <View style={styles.userInfo}>
+          <Text style={styles.userInfoText}>Logged in as: {user?.email}</Text>
+          <Text style={styles.userInfoText}>Username: {user?.username}</Text>
         </View>
-      </View>
 
-      <View style={styles.actionsContainer}>
-        <TouchableOpacity style={styles.primaryButton} onPress={handleStartWorkout}>
-          <Text style={styles.primaryButtonText}>Start Workout</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.secondaryButton} onPress={handleViewProgress}>
-          <Text style={styles.secondaryButtonText}>View Progress</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.quickStatsContainer}>
-        <Text style={styles.sectionTitle}>Recent Activity</Text>
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyStateText}>No workouts yet</Text>
-          <Text style={styles.emptyStateSubtext}>Start your first workout!</Text>
+        <View style={styles.statsContainer}>
+          <TouchableOpacity
+            style={styles.statCard}
+            onPress={() => navigation.navigate('PointsHistory')}
+          >
+            <Text style={styles.statNumber}>{user?.totalPoints || 0}</Text>
+            <Text style={styles.statLabel}>Total Points</Text>
+            <Text style={styles.statViewMore}>View History →</Text>
+          </TouchableOpacity>
+          <View style={styles.statCard}>
+            <Text style={styles.statNumber}>{user?.currentStreak || 0}</Text>
+            <Text style={styles.statLabel}>Current Streak</Text>
+          </View>
         </View>
-      </View>
+
+        <View style={styles.actionsContainer}>
+          <TouchableOpacity style={styles.primaryButton} onPress={handleStartWorkout}>
+            <Text style={styles.primaryButtonText}>Start Workout</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.secondaryButton} onPress={handleViewProgress}>
+            <Text style={styles.secondaryButtonText}>View Progress</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.quickStatsContainer}>
+          <Text style={styles.sectionTitle}>Recent Activity</Text>
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>No workouts yet</Text>
+            <Text style={styles.emptyStateSubtext}>Start your first workout!</Text>
+          </View>
+        </View>
+      </ScrollView>
     </View>
   );
 };
@@ -125,12 +141,30 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: CONFIG.COLORS.BACKGROUND,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollViewContent: {
     padding: 20,
+    paddingBottom: 40,
   },
   header: {
     alignItems: 'center',
     marginTop: 40,
     marginBottom: 20,
+  },
+  headerTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 12,
+  },
+  headerTextContainer: {
+    flex: 1,
+    alignItems: 'center',
+    marginRight: 12,
   },
   logoutButton: {
     marginTop: 12,
@@ -198,6 +232,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: CONFIG.COLORS.TEXT_SECONDARY,
   },
+  statViewMore: {
+    fontSize: 12,
+    color: CONFIG.COLORS.PRIMARY,
+    marginTop: 8,
+    fontWeight: '600',
+  },
   actionsContainer: {
     marginBottom: 30,
   },
@@ -229,7 +269,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   quickStatsContainer: {
-    flex: 1,
+    minHeight: 200,
   },
   sectionTitle: {
     fontSize: 20,
@@ -238,7 +278,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   emptyState: {
-    flex: 1,
+    minHeight: 150,
     justifyContent: 'center',
     alignItems: 'center',
   },

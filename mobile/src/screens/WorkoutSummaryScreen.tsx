@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { BaseScreenProps } from '../types';
 import { CONFIG } from '../constants/config';
+import { PointsDisplay } from '../components/PointsDisplay';
+import { PointsBreakdownModal } from '../components/PointsBreakdownModal';
 
 interface WorkoutSummaryScreenProps extends BaseScreenProps {
   route: {
@@ -12,12 +14,20 @@ interface WorkoutSummaryScreenProps extends BaseScreenProps {
       validReps: number;
       invalidReps: number;
       formErrors: string[];
+      points?: number;
+      pointsBreakdown?: {
+        basePoints: number;
+        bonuses: { name: string; points: number; description: string }[];
+        multipliers: { name: string; multiplier: number; description: string }[];
+        totalPoints: number;
+      };
     };
   };
 }
 
 export const WorkoutSummaryScreen: React.FC<WorkoutSummaryScreenProps> = ({ navigation, route }) => {
-  const { exerciseType, duration, totalReps, validReps, invalidReps, formErrors } = route.params;
+  const { exerciseType, duration, totalReps, validReps, invalidReps, formErrors, points, pointsBreakdown } = route.params;
+  const [showPointsBreakdown, setShowPointsBreakdown] = useState(false);
 
   // Calculate statistics
   const validPercentage = totalReps > 0 ? ((validReps / totalReps) * 100).toFixed(1) : '0.0';
@@ -50,6 +60,26 @@ export const WorkoutSummaryScreen: React.FC<WorkoutSummaryScreenProps> = ({ navi
           <Text style={styles.title}>Workout Complete!</Text>
           <Text style={styles.exerciseType}>{exerciseType.charAt(0).toUpperCase() + exerciseType.slice(1)}</Text>
         </View>
+
+        {/* Points Display */}
+        {points !== undefined && points > 0 && (
+          <View style={styles.pointsSection}>
+            <TouchableOpacity
+              onPress={() => pointsBreakdown && setShowPointsBreakdown(true)}
+              disabled={!pointsBreakdown}
+            >
+              <PointsDisplay points={points} size="large" />
+            </TouchableOpacity>
+            {pointsBreakdown && (
+              <TouchableOpacity
+                style={styles.viewBreakdownButton}
+                onPress={() => setShowPointsBreakdown(true)}
+              >
+                <Text style={styles.viewBreakdownText}>View Breakdown</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
         {/* Duration Card */}
         <View style={styles.card}>
@@ -109,6 +139,15 @@ export const WorkoutSummaryScreen: React.FC<WorkoutSummaryScreenProps> = ({ navi
           <Text style={styles.doneButtonText}>Done</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Points Breakdown Modal */}
+      {pointsBreakdown && (
+        <PointsBreakdownModal
+          visible={showPointsBreakdown}
+          breakdown={pointsBreakdown}
+          onClose={() => setShowPointsBreakdown(false)}
+        />
+      )}
     </View>
   );
 };
@@ -137,6 +176,21 @@ const styles = StyleSheet.create({
     fontSize: 24,
     color: CONFIG.COLORS.PRIMARY,
     fontWeight: '600',
+  },
+  pointsSection: {
+    alignItems: 'center',
+    marginBottom: 30,
+  },
+  viewBreakdownButton: {
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
+  viewBreakdownText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: CONFIG.COLORS.PRIMARY,
+    textDecorationLine: 'underline',
   },
   card: {
     backgroundColor: CONFIG.COLORS.WHITE,

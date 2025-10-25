@@ -10,22 +10,64 @@ import {
   getUnsyncedMLTrainingData,
   markSessionAsSynced,
   markMLTrainingDataAsSynced,
+  deleteWorkoutSession,
+  deleteMLTrainingDataBySession,
   type WorkoutSession,
   type MLTrainingData,
 } from './databaseHelpers';
+import {
+  syncWorkoutSession as apiSyncWorkoutSession,
+  syncMLTrainingData as apiSyncMLTrainingData,
+  type SyncWorkoutSessionInput,
+  type SyncMLTrainingDataInput,
+} from './graphqlClient';
+import {
+  ConflictResolutionService,
+  ConflictLogger,
+  type SyncConflict,
+  type ConflictResolutionResult,
+} from './conflictResolution';
+import { networkMonitor, type NetworkStatus } from './networkMonitor';
+import { deviceService } from './deviceService';
 
 // Sync Configuration
 const SYNC_CONFIG = {
-  BATCH_SIZE: 10,
+  BATCH_SIZE: 10, // Default, will be overridden by network monitor
   AUTO_SYNC_INTERVAL: 60000, // 1 minute
   MAX_CONCURRENT_SYNCS: 3,
 };
 
 // Sync Event Types
+export type SyncEventType =
+  | 'sync_started'
+  | 'sync_queueing'
+  | 'sync_processing'
+  | 'sync_progress'
+  | 'sync_completed'
+  | 'sync_failed'
+  | 'sync_conflict'
+  | 'sync_paused'
+  | 'sync_resumed';
+
+export interface SyncProgressData {
+  phase: 'queueing' | 'processing' | 'completed';
+  current: number;
+  total: number;
+  synced: number;
+  failed: number;
+  conflicts: number;
+  currentItem?: {
+    type: string;
+    id: string;
+  };
+  estimatedTimeRemaining?: number; // milliseconds
+}
+
 export type SyncEvent = {
-  type: 'sync_started' | 'sync_progress' | 'sync_completed' | 'sync_failed' | 'sync_conflict';
+  type: SyncEventType;
   data?: any;
   error?: string;
+  timestamp: number;
 };
 
 type SyncEventListener = (event: SyncEvent) => void;
@@ -74,8 +116,12 @@ export class SyncService {
   }
 
   // Emit event to all listeners
-  private emitEvent(event: SyncEvent): void {
-    this.listeners.forEach(listener => listener(event));
+  private emitEvent(event: Omit<SyncEvent, 'timestamp'>): void {
+    const fullEvent: SyncEvent = {
+      ...event,
+      timestamp: Date.now(),
+    };
+    this.listeners.forEach(listener => listener(fullEvent));
   }
 
   // Start automatic sync
@@ -111,6 +157,21 @@ export class SyncService {
     // Check network connectivity
     if (!this.isOnline) {
       console.log('📡 No network connection, skipping sync');
+      return;
+    }
+
+    // Check network quality and sync recommendation
+    const networkStatus = networkMonitor.getStatus();
+    if (!networkStatus.canSync) {
+      console.log(`📡 Network quality too poor for sync (${networkStatus.quality}), skipping...`);
+      this.emitEvent({
+        type: 'sync_paused',
+        data: {
+          reason: 'poor_network',
+          quality: networkStatus.quality,
+          message: networkMonitor.getQualityDescription(),
+        },
+      });
       return;
     }
 
@@ -155,6 +216,8 @@ export class SyncService {
   // Queue unsynced items
   private async queueUnsyncedItems(): Promise<void> {
     try {
+      this.emitEvent({ type: 'sync_queueing' });
+
       // Get unsynced workout sessions
       const sessions = await getUnsyncedWorkoutSessions();
       for (const session of sessions) {
@@ -166,6 +229,7 @@ export class SyncService {
 
       // Get unsynced ML training data
       const mlData = await getUnsyncedMLTrainingData();
+      let mlDataBatchCount = 0;
       if (mlData.length > 0) {
         // Group by session for batch upload
         const bySession = mlData.reduce((acc, frame) => {
@@ -176,6 +240,8 @@ export class SyncService {
           return acc;
         }, {} as Record<string, MLTrainingData[]>);
 
+        mlDataBatchCount = Object.keys(bySession).length;
+
         // Queue each session's ML data as a batch
         for (const [sessionId, frames] of Object.entries(bySession)) {
           const alreadyQueued = await SyncQueueManager.hasEntityInQueue('ml_training_data', sessionId);
@@ -185,7 +251,15 @@ export class SyncService {
         }
       }
 
-      console.log(`📦 Queued ${sessions.length} sessions and ${Object.keys(bySession || {}).length} ML data batches`);
+      console.log(`📦 Queued ${sessions.length} sessions and ${mlDataBatchCount} ML data batches`);
+
+      this.emitEvent({
+        type: 'sync_progress',
+        data: {
+          phase: 'queueing',
+          total: sessions.length + mlDataBatchCount,
+        } as Partial<SyncProgressData>,
+      });
     } catch (error) {
       console.error('❌ Failed to queue unsynced items:', error);
       throw error;
@@ -203,8 +277,11 @@ export class SyncService {
     let conflicts = 0;
 
     try {
+      // Get adaptive batch size based on network quality
+      const batchSize = networkMonitor.getRecommendedBatchSize();
+
       // Get retryable items
-      const items = await SyncQueueManager.getRetryableItems(SYNC_CONFIG.BATCH_SIZE);
+      const items = await SyncQueueManager.getRetryableItems(batchSize);
 
       if (items.length === 0) {
         console.log('✅ No items to sync');
@@ -213,9 +290,44 @@ export class SyncService {
 
       console.log(`📤 Processing ${items.length} items from sync queue...`);
 
+      this.emitEvent({
+        type: 'sync_processing',
+        data: {
+          phase: 'processing',
+          total: items.length,
+        } as Partial<SyncProgressData>,
+      });
+
+      const startTime = Date.now();
+
       // Process each item
-      for (const item of items) {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+
         try {
+          // Emit progress with current item
+          const elapsedTime = Date.now() - startTime;
+          const avgTimePerItem = elapsedTime / (i + 1);
+          const remainingItems = items.length - (i + 1);
+          const estimatedTimeRemaining = avgTimePerItem * remainingItems;
+
+          this.emitEvent({
+            type: 'sync_progress',
+            data: {
+              phase: 'processing',
+              current: i + 1,
+              total: items.length,
+              synced,
+              failed,
+              conflicts,
+              currentItem: {
+                type: item.entityType,
+                id: item.entityId,
+              },
+              estimatedTimeRemaining,
+            } as SyncProgressData,
+          });
+
           const result = await this.syncItem(item);
 
           if (result === SyncStatus.SUCCESS) {
@@ -228,18 +340,6 @@ export class SyncService {
             failed++;
             await SyncQueueManager.updateRetry(item.id!, 'Sync failed');
           }
-
-          // Emit progress
-          this.emitEvent({
-            type: 'sync_progress',
-            data: {
-              current: synced + failed + conflicts,
-              total: items.length,
-              synced,
-              failed,
-              conflicts,
-            },
-          });
         } catch (error) {
           console.error(`❌ Failed to sync item ${item.id}:`, error);
           failed++;
@@ -264,31 +364,94 @@ export class SyncService {
     try {
       const payload = JSON.parse(item.payload);
 
-      // TODO: Implement actual API calls to backend
-      // For now, simulate sync with delay
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Simulate 10% failure rate for testing
-      if (Math.random() < 0.1) {
-        throw new Error('Simulated network error');
-      }
-
-      // Mark as synced in local database
+      // Sync to backend using GraphQL API
       if (item.entityType === 'workout_session') {
-        await markSessionAsSynced(item.entityId);
+        const session = payload as WorkoutSession;
+
+        // Get device metadata
+        const deviceMetadata = await deviceService.getDeviceMetadata();
+
+        // Prepare sync input
+        const syncInput: SyncWorkoutSessionInput = {
+          id: session.id,
+          userId: session.userId,
+          exerciseId: session.exerciseId,
+          exerciseType: session.exerciseType,
+          totalReps: session.totalReps,
+          validReps: session.validReps,
+          invalidReps: session.invalidReps,
+          points: session.points,
+          duration: session.duration,
+          isCompleted: session.isCompleted,
+          createdAt: new Date(session.createdAt),
+          updatedAt: new Date(session.updatedAt),
+          deviceId: deviceMetadata.deviceId,
+          deviceName: deviceMetadata.deviceName,
+        };
+
+        // Call backend API
+        const response = await apiSyncWorkoutSession(syncInput);
+
+        // Handle conflicts (even if sync was successful)
+        if (response.results && response.results.length > 0) {
+          const result = response.results[0];
+          if (result.conflict) {
+            // Log the conflict
+            await ConflictResolutionService.handleConflict(result.conflict as SyncConflict);
+
+            // Note: Backend already resolved the conflict
+            // We just log it for awareness
+            console.log(`⚠️  Conflict detected and auto-resolved: ${result.conflict.resolution}`);
+          }
+        }
+
+        if (!response.success) {
+          throw new Error(response.message || 'Sync failed');
+        }
+
+        // Success - delete local data immediately
+        await deleteWorkoutSession(item.entityId);
+        console.log(`🗑️  Deleted local workout session ${item.entityId} after sync`);
+
       } else if (item.entityType === 'ml_training_data') {
         const frames = payload as MLTrainingData[];
-        const ids = frames.map(f => f.id!).filter(id => id !== undefined);
-        await markMLTrainingDataAsSynced(ids);
+        const sessionId = frames[0]?.sessionId;
+
+        if (!sessionId) {
+          throw new Error('No session ID found for ML training data');
+        }
+
+        // Prepare sync input
+        const syncInput: SyncMLTrainingDataInput[] = frames.map(frame => ({
+          sessionId: frame.sessionId,
+          frameNumber: frame.frameNumber,
+          timestamp: frame.timestamp,
+          landmarksCompressed: frame.landmarksCompressed,
+          repNumber: frame.repNumber,
+          phaseLabel: frame.phaseLabel,
+          isValidRep: frame.isValidRep,
+          createdAt: new Date(frame.createdAt),
+        }));
+
+        // Call backend API
+        const response = await apiSyncMLTrainingData(syncInput);
+
+        if (!response.success) {
+          throw new Error(response.message || 'ML data sync failed');
+        }
+
+        // Success - delete local data immediately
+        await deleteMLTrainingDataBySession(sessionId);
+        console.log(`🗑️  Deleted local ML training data for session ${sessionId} after sync`);
       }
 
-      console.log(`✅ Synced ${item.entityType}:${item.entityId}`);
+      console.log(`✅ Synced and cleaned up ${item.entityType}:${item.entityId}`);
       return SyncStatus.SUCCESS;
     } catch (error) {
       console.error(`❌ Failed to sync ${item.entityType}:${item.entityId}:`, error);
 
       // Check if it's a conflict error
-      if (error instanceof Error && error.message.includes('conflict')) {
+      if (error instanceof Error && (error.message.includes('conflict') || error.message.includes('Conflict'))) {
         return SyncStatus.CONFLICT;
       }
 
@@ -334,6 +497,22 @@ export class SyncService {
   async clearFailed(): Promise<void> {
     await SyncQueueManager.clearFailedItems();
     console.log('✅ Cleared all failed items');
+  }
+
+  // Get conflict statistics
+  getConflictStats(): {
+    total: number;
+    byResolution: Record<string, number>;
+    byType: Record<string, number>;
+    recent: SyncConflict[];
+  } {
+    return ConflictResolutionService.generateConflictSummary();
+  }
+
+  // Clear conflict history
+  clearConflictHistory(): void {
+    ConflictLogger.clearConflicts();
+    console.log('✅ Cleared conflict history');
   }
 }
 

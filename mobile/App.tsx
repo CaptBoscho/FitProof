@@ -7,6 +7,9 @@ import { AppNavigator } from './src/navigation/AppNavigator';
 import { apolloClient } from './src/services/apolloClient';
 import { AuthProvider } from './src/contexts/AuthContext';
 import { initDatabase } from './src/services/database';
+import { syncService } from './src/services/syncService';
+import { backgroundSyncService } from './src/services/backgroundSync';
+import { deviceService } from './src/services/deviceService';
 
 export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
@@ -15,17 +18,44 @@ export default function App() {
   useEffect(() => {
     const initializeApp = async () => {
       try {
-        console.log('🚀 Initializing FitProof database...');
+        console.log('🚀 Initializing FitProof...');
+
+        // Initialize database
+        console.log('📦 Initializing database...');
         await initDatabase();
-        console.log('✅ Database initialized successfully');
+        console.log('✅ Database initialized');
+
+        // Initialize device service
+        console.log('📱 Initializing device...');
+        await deviceService.initialize();
+        console.log('✅ Device initialized');
+
+        // Initialize background sync
+        console.log('🔄 Initializing background sync...');
+        await backgroundSyncService.initialize();
+        await backgroundSyncService.start();
+        console.log('✅ Background sync initialized');
+
+        // Start auto-sync
+        console.log('⚡ Starting auto-sync...');
+        syncService.startAutoSync();
+        console.log('✅ Auto-sync started');
+
+        console.log('🎉 FitProof initialized successfully');
         setIsDbReady(true);
       } catch (error) {
-        console.error('❌ Failed to initialize database:', error);
+        console.error('❌ Failed to initialize app:', error);
         setDbError(error instanceof Error ? error.message : 'Unknown error');
       }
     };
 
     initializeApp();
+
+    // Cleanup on unmount
+    return () => {
+      syncService.stopAutoSync();
+      backgroundSyncService.stop().catch(console.error);
+    };
   }, []);
 
   if (dbError) {

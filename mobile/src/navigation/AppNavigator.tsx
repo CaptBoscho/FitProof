@@ -10,6 +10,8 @@ import { EditProfileScreen } from '../screens/EditProfileScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { MediaPipeDemoScreen } from '../screens/MediaPipeDemoScreen';
 import { WorkoutSummaryScreen } from '../screens/WorkoutSummaryScreen';
+import { SyncStatusScreen } from '../screens/SyncStatusScreen';
+import { PointsHistoryScreen } from '../screens/PointsHistoryScreen';
 import { RootStackParamList } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { ProtectedRoute } from '../components/ProtectedRoute';
@@ -155,6 +157,34 @@ export const AppNavigator: React.FC = () => {
               {({ navigation, route }) => (
                 <ProtectedRoute requireAuth={true}>
                   <WorkoutSummaryScreen navigation={navigation} route={route} />
+                </ProtectedRoute>
+              )}
+            </Stack.Screen>
+            <Stack.Screen
+              name="SyncStatus"
+              options={{
+                headerShown: true,
+                title: 'Sync Status',
+                headerBackTitleVisible: false,
+              }}
+            >
+              {({ navigation, route }) => (
+                <ProtectedRoute requireAuth={true}>
+                  <SyncStatusScreen navigation={navigation} route={route} />
+                </ProtectedRoute>
+              )}
+            </Stack.Screen>
+            <Stack.Screen
+              name="PointsHistory"
+              options={{
+                headerShown: true,
+                title: 'Points History',
+                headerBackTitleVisible: false,
+              }}
+            >
+              {({ navigation, route }) => (
+                <ProtectedRoute requireAuth={true}>
+                  <PointsHistoryScreen navigation={navigation} route={route} />
                 </ProtectedRoute>
               )}
             </Stack.Screen>

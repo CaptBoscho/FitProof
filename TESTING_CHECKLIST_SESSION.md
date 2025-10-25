@@ -602,6 +602,437 @@ This session implemented:
 
 ---
 
+## 🔄 Sync Queue Testing (Day 32)
+
+### Test Utilities Location
+**Files**:
+- `src/services/__tests__/syncQueue.test.ts`
+- Functions: `testSyncQueue()`, `testSyncService()`
+
+### How to Run Tests
+
+#### From React Native Debugger Console
+```javascript
+import { testSyncQueue, testSyncService } from './src/services/__tests__/syncQueue.test';
+
+// Test sync queue operations
+await testSyncQueue();
+
+// Test sync service
+await testSyncService();
+```
+
+#### Or from a Screen Component
+Add a button to any screen that calls these test functions.
+
+### Sync Queue Manager Tests
+
+- [ ] **Test 1: Add Items to Queue**
+  - Adds workout_session and ml_training_data items
+  - Verify console shows "Added item 1" and "Added item 2"
+  - Check: Items have unique IDs returned
+
+- [ ] **Test 2: Get Pending Items**
+  - Retrieves all pending items from queue
+  - Verify console shows count and list of items
+  - Check: Shows entityType:entityId and retry count
+
+- [ ] **Test 3: Queue Statistics**
+  - Gets total, pending, retrying, and failed counts
+  - Verify console shows all 4 statistics
+  - Check: Numbers are accurate
+
+- [ ] **Test 4: Exponential Backoff**
+  - Calculates retry delays for attempts 0-5
+  - Verify console shows: 1s, 2s, 4s, 8s, 16s, 60s (max)
+  - Check: Delays increase exponentially until max
+
+- [ ] **Test 5: Update Retry Count**
+  - Increments retry count for a failed item
+  - Verify console shows updated retry count
+  - Verify last error message is stored
+
+- [ ] **Test 6: Conflict Detection**
+  - Creates local and server data with different values
+  - Detects conflicts based on timestamps
+  - Verify console shows:
+    - Has conflict: true/false
+    - Conflict fields: array of field names
+    - Resolution strategy: server_wins/client_wins/merge
+
+- [ ] **Test 7: Retryable Items**
+  - Gets items ready for retry based on backoff delay
+  - Verify console shows retryable count
+  - Check: Next retry time is calculated correctly
+
+- [ ] **Test 8: Sync Service Status**
+  - Gets current sync status (online, syncing, queue stats)
+  - Verify console shows isOnline, isSyncing, queueStats
+  - Check: Values reflect current state
+
+- [ ] **Test 9: Remove from Queue**
+  - Removes a completed item from queue
+  - Verify console shows updated queue count
+  - Check: Total decreases by 1
+
+- [ ] **Test 10: Check Entity in Queue**
+  - Checks if specific entity exists in queue
+  - Verify console shows correct true/false results
+  - Check: Returns true for existing, false for missing
+
+### Sync Service Tests
+
+- [ ] **Test 1: Manual Sync**
+  - Triggers sync() manually
+  - Verify console shows "Sync completed"
+  - Check: No errors during sync process
+
+- [ ] **Test 2: Event Listener**
+  - Subscribes to sync events
+  - Verify console shows events: sync_started, sync_progress, sync_completed
+  - Check: Event data includes relevant information
+
+- [ ] **Test 3: Auto Sync**
+  - Starts auto-sync (60 second interval)
+  - Verify console shows "Auto-sync started"
+  - Wait 60+ seconds, verify sync runs automatically
+  - Stop auto-sync, verify console shows "Auto-sync stopped"
+
+### Network Connectivity Tests
+
+- [ ] **Going Offline**
+  1. Enable airplane mode or disable WiFi
+  2. Trigger sync manually
+  3. Verify console shows "No network connection, skipping sync"
+  4. Check: Sync doesn't attempt when offline
+
+- [ ] **Coming Online**
+  1. Start with airplane mode ON
+  2. Add items to queue
+  3. Disable airplane mode (go online)
+  4. Verify console shows "Network restored - triggering sync..."
+  5. Check: Automatic sync occurs when network returns
+
+- [ ] **Sync Already in Progress**
+  1. Start a sync
+  2. Trigger another sync immediately
+  3. Verify console shows "Sync already in progress, skipping..."
+  4. Check: No concurrent syncs occur
+
+### Queue Processing Tests
+
+- [ ] **Successful Sync**
+  - Add items to queue
+  - Trigger sync with good network
+  - Verify console shows items being synced
+  - Check: Items removed from queue after success
+
+- [ ] **Failed Sync with Retry**
+  - Simulate network error (10% failure rate built-in)
+  - Verify failed items stay in queue
+  - Verify retry count increments
+  - Check: Exponential backoff applies
+
+- [ ] **Max Retry Exceeded**
+  - Force an item to fail 5 times
+  - Verify item marked as "failed" (retry_count >= 5)
+  - Verify item no longer retried automatically
+  - Check: getFailedItems() returns the item
+
+- [ ] **Conflict Handling**
+  - Simulate conflict error (server data newer)
+  - Verify console shows conflict detected
+  - Verify conflict resolution strategy applied
+  - Check: Merged data or server data wins
+
+### Performance Tests
+
+- [ ] **Bulk Queue Operations**
+  - Add 100+ items to queue
+  - Verify no performance degradation
+  - Check: Queue operations complete in < 1 second
+
+- [ ] **Sync Progress Events**
+  - Sync 20+ items
+  - Verify progress events fire for each item
+  - Check: Event data shows current/total/synced/failed
+
+### Edge Cases
+
+- [ ] **Empty Queue Sync**
+  - Clear all queue items
+  - Trigger sync
+  - Verify console shows "No items to sync"
+  - Check: No errors occur
+
+- [ ] **Duplicate Entity Detection**
+  - Add same entity twice (same entityType + entityId)
+  - Verify hasEntityInQueue() returns true
+  - Check: Prevents duplicate queue entries
+
+- [ ] **Queue Statistics Accuracy**
+  - Add mix of items with different retry counts
+  - Verify getQueueStats() shows correct breakdown
+  - Check: pending + retrying + failed = total
+
+### Manual Verification
+
+- [ ] **Database Inspection**
+  - After running tests, inspect SQLite database
+  - Check sync_queue table has correct schema
+  - Verify data matches expected state
+
+- [ ] **Console Logs**
+  - Review all console logs for errors
+  - Verify debug logs use proper emojis (✅, ❌, 🔄, ⚠️)
+  - Check: All operations logged clearly
+
+### Acceptance Criteria
+
+- ✅ Queue operations (add, remove, retry) work correctly
+- ✅ Exponential backoff delays calculated correctly (1s → 60s max)
+- ✅ Network monitoring detects online/offline transitions
+- ✅ Auto-sync runs every 60 seconds when enabled
+- ✅ Conflict detection identifies and resolves conflicts
+- ✅ Event emitters fire for sync lifecycle events
+- ✅ Failed items tracked and retried appropriately
+- ✅ Max retry limit (5) enforced
+- ✅ Sync service singleton pattern works correctly
+
+---
+
+## 💾 Data Management Testing (Day 33)
+
+### Test Utilities Location
+**Files**:
+- `src/services/__tests__/dataManagement.test.ts`
+- Functions: `testDataManagement()`, `testStorageMonitoring()`, `testCleanupPolicies()`
+
+### How to Run Tests
+
+#### From React Native Debugger Console
+```javascript
+import { testDataManagement, testStorageMonitoring, testCleanupPolicies } from './src/services/__tests__/dataManagement.test';
+
+// Test data management service
+await testDataManagement();
+
+// Test storage monitoring
+await testStorageMonitoring();
+
+// Test cleanup policies
+await testCleanupPolicies();
+```
+
+### Storage Statistics Tests
+
+- [ ] **Test 1: Get Storage Statistics**
+  - Retrieves current storage usage
+  - Verify console shows:
+    - Total size in MB
+    - Workout sessions count and size
+    - ML data count and size
+    - Sync queue count and size
+    - Percentage used
+    - Is near limit (true if > 80%)
+  - Check: All values are reasonable numbers
+
+- [ ] **Test 2: Storage Monitoring**
+  - Creates 5 test workout sessions with ML data
+  - Monitors storage growth after each session
+  - Verify console shows progressive size increase
+  - Check: Storage percentage increases with each session
+
+- [ ] **Test 3: Storage Warning Threshold**
+  - Check if storage is near 80% limit
+  - Verify `isNearLimit` flag is accurate
+  - Check: Warning triggers at correct threshold
+
+### Data Lifecycle Tests
+
+- [ ] **Test 4: Lifecycle Summary**
+  - Gets oldest/newest timestamps for sessions and ML data
+  - Shows unsynced data counts
+  - Verify console displays:
+    - Oldest session date
+    - Newest session date
+    - Oldest ML data date
+    - Newest ML data date
+    - Unsynced sessions count
+    - Unsynced ML data count
+    - Pending sync items count
+  - Check: Dates are in correct order (oldest < newest)
+
+- [ ] **Test 5: Unsynced Data Tracking**
+  - Create sessions without marking as synced
+  - Verify lifecycle summary shows correct unsynced counts
+  - Check: Counts match actual unsynced items
+
+### Cleanup Tests
+
+- [ ] **Test 6: Check if Cleanup Needed**
+  - Calls `needsCleanup()`
+  - Verify returns true when storage > 80%
+  - Verify returns false when storage < 80%
+  - Check: Threshold detection works correctly
+
+- [ ] **Test 7: Automatic Cleanup (Dry Run)**
+  - Run cleanup when storage is below threshold
+  - Verify no items deleted
+  - Verify console shows "No cleanup needed"
+  - Check: Cleanup respects storage threshold
+
+- [ ] **Test 8: Force Cleanup**
+  - Run cleanup with `force: true`
+  - Verify cleanup executes regardless of threshold
+  - Check console shows:
+    - Workout sessions deleted count
+    - ML data deleted count
+    - Sync queue cleaned count
+    - Space freed in MB
+  - Check: Cleanup completes without errors
+
+- [ ] **Test 9: ML Data Retention Policy (30 days)**
+  - Create ML data older than 30 days
+  - Mark as synced
+  - Run cleanup
+  - Verify old ML data is deleted
+  - Check: Only synced old data removed
+
+- [ ] **Test 10: Workout Session Retention (90 days)**
+  - Create workout sessions older than 90 days
+  - Mark as synced
+  - Run cleanup
+  - Verify old sessions are deleted
+  - Check: Only synced old sessions removed
+
+- [ ] **Test 11: Sync Queue Retention (7 days)**
+  - Add failed items to sync queue older than 7 days
+  - Run cleanup
+  - Verify old failed items removed
+  - Check: Only items with retry_count >= 5 removed
+
+- [ ] **Test 12: Preserve Unsynced Data**
+  - Create old unsynced data
+  - Run cleanup
+  - Verify unsynced data is NOT deleted
+  - Check: Cleanup only removes synced data
+
+### Data Export Tests
+
+- [ ] **Test 13: Export Data**
+  - Call `exportData(true)` to include ML data sample
+  - Verify export contains:
+    - Timestamp
+    - Version number
+    - Storage stats
+    - All workout sessions
+    - Sample of ML data (last 100 frames)
+    - Sync queue snapshot
+  - Check: Export data structure is complete
+
+- [ ] **Test 14: Export Without ML Data**
+  - Call `exportData(false)`
+  - Verify ML data sample is empty array
+  - Verify other data is still included
+  - Check: Option to exclude ML data works
+
+- [ ] **Test 15: Export as JSON String**
+  - Call `exportDataAsJSON()`
+  - Verify returns valid JSON string
+  - Verify can be parsed back to object
+  - Check: JSON is properly formatted
+
+- [ ] **Test 16: Export Data Size**
+  - Export data with ML samples
+  - Check JSON string length
+  - Verify it's reasonable size (not too large)
+  - Check: Sample limiting works (only 100 ML frames)
+
+### Performance Tests
+
+- [ ] **Test 17: Storage Stats Performance**
+  - Call `getStorageStats()` multiple times
+  - Verify completes in < 500ms
+  - Check: No performance degradation
+
+- [ ] **Test 18: Cleanup Performance**
+  - Run cleanup on database with 100+ sessions
+  - Verify cleanup completes in reasonable time
+  - Check: Batch operations work efficiently
+
+- [ ] **Test 19: Export Performance**
+  - Export data with 50+ sessions
+  - Verify export completes in < 2 seconds
+  - Check: Large exports don't hang
+
+### Edge Cases
+
+- [ ] **Test 20: Empty Database**
+  - Clear all data
+  - Call `getStorageStats()`
+  - Verify returns zero counts
+  - Check: No errors on empty database
+
+- [ ] **Test 21: Cleanup Empty Database**
+  - Run cleanup on empty database
+  - Verify returns zero deletions
+  - Check: No errors, completes gracefully
+
+- [ ] **Test 22: Concurrent Cleanup**
+  - Trigger cleanup twice simultaneously
+  - Verify second call skips (already running)
+  - Verify console shows "Cleanup already in progress"
+  - Check: No race conditions
+
+- [ ] **Test 23: Delete All Unsynced Data**
+  - Create unsynced sessions and ML data
+  - Call `deleteAllUnsyncedData()`
+  - Verify all unsynced data removed
+  - Verify synced data preserved
+  - Check: Dangerous operation works correctly
+
+### Integration Tests
+
+- [ ] **Test 24: Cleanup After Sync**
+  - Create old synced sessions
+  - Run sync service to mark as synced
+  - Run cleanup
+  - Verify old synced items removed
+  - Check: Integration with sync service works
+
+- [ ] **Test 25: Storage Growth Monitoring**
+  - Create 10 workout sessions
+  - Monitor storage growth
+  - Verify storage increases predictably
+  - Check: Size estimates are accurate
+
+### Manual Verification
+
+- [ ] **Database Inspection**
+  - After running tests, inspect SQLite database
+  - Verify cleanup removed expected records
+  - Check data integrity maintained
+
+- [ ] **Console Logs**
+  - Review all console logs for errors
+  - Verify cleanup logs use proper emojis (🧹, 📊, 📤, ✅, ❌)
+  - Check: All operations logged clearly
+
+### Acceptance Criteria
+
+- ✅ Storage statistics accurately report size and counts
+- ✅ Storage warning triggers at 80% threshold
+- ✅ Cleanup respects retention policies (90/30/7 days)
+- ✅ Cleanup preserves unsynced data
+- ✅ Data export generates complete JSON output
+- ✅ Lifecycle summary shows accurate data age
+- ✅ Cleanup runs without errors or data loss
+- ✅ Performance is acceptable for large datasets
+- ✅ Edge cases handled gracefully
+
+---
+
 **Testing Completed By**: _________________
 **Date Completed**: _________________
 **Build Version**: _________________

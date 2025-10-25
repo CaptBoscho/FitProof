@@ -534,7 +534,7 @@ class PoseDetector {
 
         // Check visibility of key landmarks
         let keyLandmarks = [nose, leftShoulder, rightShoulder, leftHip, rightHip]
-        let visibleCount = keyLandmarks.filter { $0.visibility > 0.5 }.count
+        let visibleCount = keyLandmarks.filter { ($0.visibility as? Double ?? 0.0) > 0.5 }.count
 
         guard visibleCount >= 4 else {
             NSLog("Debug_Situp: ⚠️ Insufficient landmark visibility (%d/5)", visibleCount)
@@ -546,16 +546,16 @@ class PoseDetector {
             x: (leftShoulder.x + rightShoulder.x) / 2,
             y: (leftShoulder.y + rightShoulder.y) / 2,
             z: (leftShoulder.z + rightShoulder.z) / 2,
-            visibility: min(leftShoulder.visibility, rightShoulder.visibility),
-            presence: min(leftShoulder.presence, rightShoulder.presence)
+            visibility: NSNumber(value: min(leftShoulder.visibility as? Double ?? 0.0, rightShoulder.visibility as? Double ?? 0.0)),
+            presence: NSNumber(value: min(leftShoulder.presence as? Double ?? 0.0, rightShoulder.presence as? Double ?? 0.0))
         )
 
         let avgHip = NormalizedLandmark(
             x: (leftHip.x + rightHip.x) / 2,
             y: (leftHip.y + rightHip.y) / 2,
             z: (leftHip.z + rightHip.z) / 2,
-            visibility: min(leftHip.visibility, rightHip.visibility),
-            presence: min(leftHip.presence, rightHip.presence)
+            visibility: NSNumber(value: min(leftHip.visibility as? Double ?? 0.0, rightHip.visibility as? Double ?? 0.0)),
+            presence: NSNumber(value: min(leftHip.presence as? Double ?? 0.0, rightHip.presence as? Double ?? 0.0))
         )
 
         // Calculate torso angle: hip -> shoulder -> nose

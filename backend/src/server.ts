@@ -9,6 +9,7 @@ import { ExerciseResolver } from './resolvers/ExerciseResolver';
 import { UserResolver } from './resolvers/UserResolver';
 import { WorkoutSessionResolver } from './resolvers/WorkoutSessionResolver';
 import { AuthResolver } from './resolvers/AuthResolver';
+import { SyncResolver } from './resolvers/SyncResolver';
 import { createAuthContext } from './middleware/AuthMiddleware';
 import {
   refreshTokenHandler,
@@ -40,7 +41,7 @@ async function startServer() {
 
     // Build schema with all resolvers
     const schema = await buildSchema({
-      resolvers: [HealthResolver, ExerciseResolver, UserResolver, WorkoutSessionResolver, AuthResolver],
+      resolvers: [HealthResolver, ExerciseResolver, UserResolver, WorkoutSessionResolver, AuthResolver, SyncResolver],
       validate: false
     });
 

@@ -74,6 +74,7 @@ export type RootStackParamList = {
   Profile: undefined;
   EditProfile: undefined;
   Settings: undefined;
+  SyncStatus: undefined;
 };
 
 export type AuthStackParamList = {
